@@ -147,6 +147,9 @@ class SampleFrame:
             key = spec.strip().lower()
             if key in self.axes:
                 return key.upper()
+            # Bare Cartesian axes read better upper case in a plot title.
+            if key.lstrip("+-") in ("x", "y", "z"):
+                return spec.strip().upper()
             return spec.strip()
         v = np.asarray(spec, dtype=float)
         return "[" + " ".join(f"{c:g}" for c in v) + "]"

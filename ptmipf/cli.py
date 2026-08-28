@@ -26,6 +26,15 @@ examples:
 
   # A dual-phase Mg/Al configuration: identify both, colour only the hcp phase
   ptmipf alloy.dump -o out.xyz --structures hcp,fcc --color-only hcp
+
+  # Only the basal-oriented grains: select them, then plot and render the subset
+  ptmipf mg.dump --structures hcp --direction nd --from-selection \
+      --select-orientation '0001|nd|15' --selection-output basal.xyz \
+      --pole-figure 0001 --render basal.png --hide-other
+
+  # One grain, picked from an atom in it, in the top half of the cell
+  ptmipf mg.dump --structures hcp --from-selection --select-grain 12345 \
+      --select-region 'z|60|' --ipf-density grain.png
 """
 
 
@@ -97,6 +106,71 @@ def build_parser() -> argparse.ArgumentParser:
         "--frame", type=int, default=0, help="trajectory frame to analyse (default: 0)"
     )
 
+    group = parser.add_argument_group(
+        "selection",
+        "Build a subset of atoms from one or more criteria.  Fields of the "
+        "composite options are separated by '|', so a direction may still "
+        "contain commas.",
+    )
+    group.add_argument(
+        "--select-structure", metavar="NAMES", help="select atoms identified as these structures"
+    )
+    group.add_argument(
+        "--select-type", metavar="NAMES", help="select these particle types, by name or id"
+    )
+    group.add_argument(
+        "--select-rmsd-below", type=float, metavar="F", help="select a better fit than F"
+    )
+    group.add_argument(
+        "--select-rmsd-above", type=float, metavar="F", help="select a worse fit than F"
+    )
+    group.add_argument(
+        "--select-region",
+        action="append",
+        default=[],
+        metavar="AXIS|MIN|MAX",
+        help="select a slab, e.g. 'z|10|60' or 'nd||60'.  Repeatable",
+    )
+    group.add_argument(
+        "--select-orientation",
+        action="append",
+        default=[],
+        metavar="CRYSTAL|SAMPLE|TOL",
+        help="select atoms whose crystal direction lies within TOL degrees of a "
+        "sample direction, e.g. '0001|nd|15' for the basal-oriented grains.  Repeatable",
+    )
+    group.add_argument(
+        "--select-grain",
+        type=int,
+        metavar="INDEX",
+        help="select atoms whose full orientation matches that of atom INDEX, "
+        "which picks out one grain",
+    )
+    group.add_argument(
+        "--select-grain-tolerance",
+        type=float,
+        default=10.0,
+        metavar="DEG",
+        help="misorientation tolerance for --select-grain (default: %(default)s)",
+    )
+    group.add_argument(
+        "--select-mode",
+        choices=("and", "or"),
+        default="and",
+        help="how to combine several criteria (default: %(default)s)",
+    )
+    group.add_argument("--invert-selection", action="store_true", help="select everything else")
+    group.add_argument(
+        "--orientation-structure",
+        help="structure the orientation queries apply to (default: the first coloured structure)",
+    )
+    group.add_argument("--selection-output", metavar="FILE", help="write only the selection here")
+    group.add_argument(
+        "--from-selection",
+        action="store_true",
+        help="restrict the output, plots and rendering to the selection",
+    )
+
     group = parser.add_argument_group("plots")
     group.add_argument(
         "--legend", nargs="?", const="", help="write the IPF colour key to this PNG"
@@ -158,6 +232,93 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _split_fields(text: str, n: int, option: str):
+    fields = [f.strip() for f in text.split("|")]
+    if not 1 <= len(fields) <= n:
+        raise SystemExit(f"{option} expects up to {n} fields separated by '|', got {text!r}")
+    return fields + [""] * (n - len(fields))
+
+
+def _optional_float(text: str, option: str):
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        raise SystemExit(f"{option}: {text!r} is not a number") from None
+
+
+def _build_selection(args, result, structures, coloured):
+    """Turn the --select-* options into one boolean mask, or None."""
+    from . import select as selection
+
+    masks = []
+    if args.select_structure:
+        wanted = _parse_structure_list(args.select_structure)
+        masks.append(selection.select_by_structure(result, wanted))
+    if args.select_type:
+        names = [t.strip() for t in args.select_type.split(",") if t.strip()]
+        masks.append(selection.select_by_type(result, names))
+    if args.select_rmsd_below is not None or args.select_rmsd_above is not None:
+        masks.append(
+            selection.select_by_rmsd(
+                result, maximum=args.select_rmsd_below, minimum=args.select_rmsd_above
+            )
+        )
+    for spec in args.select_region:
+        axis, low, high = _split_fields(spec, 3, "--select-region")
+        masks.append(
+            selection.select_by_region(
+                result,
+                axis or "z",
+                minimum=_optional_float(low, "--select-region"),
+                maximum=_optional_float(high, "--select-region"),
+            )
+        )
+
+    orientation_structure = args.orientation_structure or next(
+        (s for s in coloured if get_structure(s).colorable), None
+    )
+    needs_structure = args.select_orientation or args.select_grain is not None
+    if needs_structure and orientation_structure is None:
+        raise SystemExit("an orientation query needs a colourable structure")
+
+    for spec in args.select_orientation:
+        crystal, sample, tolerance = _split_fields(spec, 3, "--select-orientation")
+        if not crystal or not sample:
+            raise SystemExit(f"--select-orientation needs CRYSTAL|SAMPLE, got {spec!r}")
+        masks.append(
+            selection.select_by_ipf_direction(
+                result,
+                crystal,
+                sample,
+                _optional_float(tolerance, "--select-orientation") or 15.0,
+                structure=orientation_structure,
+                c_over_a=args.c_over_a if args.c_over_a is not None else float(np.sqrt(8.0 / 3.0)),
+            )
+        )
+
+    if args.select_grain is not None:
+        if not 0 <= args.select_grain < result.n_atoms:
+            raise SystemExit(
+                f"--select-grain {args.select_grain} is outside the configuration "
+                f"(0 to {result.n_atoms - 1})"
+            )
+        masks.append(
+            selection.select_by_misorientation(
+                result,
+                args.select_grain,
+                args.select_grain_tolerance,
+                structure=orientation_structure,
+            )
+        )
+
+    if not masks:
+        return None
+    mask = selection.combine(*masks, mode=args.select_mode)
+    return selection.invert(mask) if args.invert_selection else mask
+
+
 def _color(text: str):
     parts = [float(t) for t in text.replace(",", " ").split()]
     if len(parts) != 3:
@@ -203,6 +364,26 @@ def main(argv=None) -> int:
     if not args.quiet:
         print(result.summary())
 
+    coloured = only or structures
+    mask = _build_selection(args, result, structures, coloured)
+    if mask is not None:
+        selected = result.subset(mask)
+        if not args.quiet:
+            percent = 100 * selected.n_atoms / max(result.n_atoms, 1)
+            print(f"selection: {selected.n_atoms} atoms ({percent:.1f} %)")
+        if args.selection_output:
+            from .io import write_result
+
+            fmt = write_result(selected, args.selection_output, args.format)
+            if not args.quiet:
+                print(f"wrote {args.selection_output} ({fmt}, selection only)")
+        if args.from_selection:
+            if selected.n_atoms == 0:
+                raise SystemExit("the selection is empty; nothing to output or plot")
+            result = selected
+    elif args.selection_output or args.from_selection:
+        raise SystemExit("no selection criteria were given; see the 'selection' options")
+
     if args.output:
         from .io import write_result
 
@@ -210,7 +391,6 @@ def main(argv=None) -> int:
         if not args.quiet:
             print(f"wrote {args.output} ({fmt})")
 
-    coloured = only or structures
     plot_structure = args.pole_figure_structure or next(
         (s for s in coloured if get_structure(s).colorable), None
     )
@@ -281,7 +461,7 @@ def main(argv=None) -> int:
                 print(f"wrote {args.ipf_density}")
 
     if args.render:
-        from .render import render_ipf
+        from .render import render_result
 
         try:
             width, height = (int(v) for v in args.render_size.lower().split("x"))
@@ -289,15 +469,9 @@ def main(argv=None) -> int:
             raise SystemExit(
                 f"--render-size must look like 800x600, got {args.render_size!r}"
             ) from None
-        render_ipf(
-            args.input,
+        render_result(
+            result,
             args.render,
-            direction=args.direction,
-            structures=structures,
-            frame=frame,
-            frame_index=args.frame,
-            rmsd_cutoff=args.rmsd_cutoff,
-            other_color=_color(args.other_color),
             hide_other=args.hide_other,
             slice_normal=args.slice_normal,
             slice_distance=args.slice_distance,

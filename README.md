@@ -108,6 +108,37 @@ what makes MRD meaningful. Poles are given in Miller or Miller–Bravais notatio
 Non-basal, non-prismatic hexagonal poles such as `{10-11}` depend on the axial ratio, so
 pass `--c-over-a` for your material (1.6236 for magnesium; the ideal 1.633 is the default).
 
+### Selecting atoms
+
+Any part of a configuration can be isolated and then coloured, plotted, rendered or
+exported on its own — one grain, one phase, one orientation fibre, one region of the cell,
+or the well-fitted atoms only. Criteria combine with `--select-mode and|or` and can be
+inverted; the fields of the composite options are separated by `|`, so a direction may
+still contain commas.
+
+```bash
+# The basal-oriented grains: c axis within 15 degrees of ND
+ptmipf mg.dump --structures hcp --direction nd --from-selection     --select-orientation '0001|nd|15' --selection-output basal.xyz     --pole-figure 0001 --render basal.png --hide-other
+
+# A single grain, taken from the orientation of atom 12345, in the top of the cell
+ptmipf mg.dump --structures hcp --from-selection     --select-grain 12345 --select-region 'z|60|' --ipf-density grain.png
+```
+
+| option | selects |
+|---|---|
+| `--select-orientation 'CRYSTAL\|SAMPLE\|TOL'` | atoms whose crystal direction (`0001`, `10-10`, `111`) lies within `TOL` degrees of a sample direction — an orientation fibre |
+| `--select-grain INDEX` | atoms whose **whole** orientation matches that of atom `INDEX`, within `--select-grain-tolerance` — one grain |
+| `--select-structure`, `--select-type` | a phase, or a chemical species |
+| `--select-region 'AXIS\|MIN\|MAX'` | a slab along a cell axis, a named sample axis or a vector |
+| `--select-rmsd-below F` | the well-fitted atoms, dropping the distorted first shell at a boundary |
+
+`--from-selection` restricts `-o`, the plots and `--render` to the selection;
+`--selection-output` writes just the selection while leaving everything else on the full
+configuration. The difference between the two orientation queries matters: an orientation
+fibre (`--select-orientation`) fixes one crystal direction and leaves the rotation about it
+free, so it catches every grain sharing that texture component, while `--select-grain`
+constrains the full orientation and so isolates a single grain.
+
 ### Supported structures
 
 | structure | Laue group | red / green / blue corners |
@@ -143,6 +174,25 @@ ipf_legend("6/mmm", direction_label="ED", filename="key.png")
 pole_figure(rotations, ["0001", "10-10"], "6/mmm", sample_frame=frame,
             c_over_a=1.6236, filename="pf.png")
 ```
+
+Selections are boolean masks over a result, so they compose freely:
+
+```python
+from ptmipf.select import select_by_ipf_direction, select_by_rmsd, combine
+from ptmipf.render import render_result
+
+basal = select_by_ipf_direction(result, "0001", "nd", tolerance_deg=15, structure="hcp")
+good = select_by_rmsd(result, maximum=0.08)
+
+grains = result.subset(combine(basal, good))     # a new IPFResult, counts recomputed
+pole_figure(grains.rotations("hcp"), "0001", "6/mmm", filename="basal_pf.png")
+render_result(grains, "basal.png", hide_other=True)
+```
+
+`result.recolor("rd")` returns a copy projected along another direction without re-running
+PTM, which is what makes an interactive front end responsive.
+`ptmipf.select.misorientation_angles` gives the symmetry-reduced disorientation in degrees
+against a reference orientation, a quaternion or an atom index.
 
 The colour key is independent of OVITO, so orientations from any source can be coloured:
 

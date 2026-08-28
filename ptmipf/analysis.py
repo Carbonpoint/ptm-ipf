@@ -7,7 +7,7 @@ parts of the package can be used (and tested) without it.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -95,6 +95,72 @@ class IPFResult:
         """Crystal-to-sample rotation matrices, optionally for one structure."""
         q = self.orientations if structure is None else self.orientations[self.mask(structure)]
         return quaternions_to_matrices(q)
+
+    def subset(self, mask: np.ndarray) -> IPFResult:
+        """Return a copy containing only the atoms selected by *mask*.
+
+        The structure counts are recomputed, so the subset can be summarised,
+        plotted, coloured and written out exactly like a full result.  Use it to
+        restrict an IPF map or a pole figure to a selection, for example one
+        grain, one phase or one region of the cell.
+        """
+        mask = np.asarray(mask)
+        if mask.dtype != bool:
+            indices = np.asarray(mask, dtype=int)
+            mask = np.zeros(self.n_atoms, dtype=bool)
+            mask[indices] = True
+        if mask.shape != (self.n_atoms,):
+            raise ValueError(
+                f"mask has shape {mask.shape}, expected ({self.n_atoms},)"
+            )
+
+        counts = {}
+        for structure in self.structures:
+            code = self.type_codes[structure.name]
+            counts[structure.name] = int((self.structure_types[mask] == code).sum())
+        counts["other"] = int(mask.sum() - sum(counts.values()))
+
+        return replace(
+            self,
+            positions=self.positions[mask],
+            structure_types=self.structure_types[mask],
+            orientations=self.orientations[mask],
+            colors=self.colors[mask],
+            rmsd=self.rmsd[mask],
+            particle_types=self.particle_types[mask],
+            counts=counts,
+        )
+
+    def recolor(self, direction, frame: SampleFrame | None = None, only=None) -> IPFResult:
+        """Return a copy coloured along a different sample direction.
+
+        Recolouring is cheap; re-running polyhedral template matching is not, so
+        an interactive front end should reuse one result and call this.
+        """
+        from .colorkey import IPFColorKey
+
+        frame = frame or self.frame
+        d = frame.direction(direction)
+        colour_these = {get_structure(s).name for s in (only or [s.name for s in self.structures])}
+
+        other = self.colors[self.structure_types == self.type_codes.get("other", 0)]
+        default = other[0] if len(other) else np.array(DEFAULT_OTHER_COLOR)
+        colors = np.tile(np.asarray(default, dtype=float), (self.n_atoms, 1))
+        for structure in self.structures:
+            selection = self.structure_types == self.type_codes[structure.name]
+            if not structure.colorable or structure.name not in colour_these or not selection.any():
+                continue
+            key = IPFColorKey(get_laue_group(structure.laue))
+            rotations = quaternions_to_matrices(self.orientations[selection])
+            colors[selection] = key.orientation2color(rotations, d)
+
+        return replace(
+            self,
+            colors=colors,
+            direction=d,
+            direction_label=frame.label(direction),
+            frame=frame,
+        )
 
     def summary(self) -> str:
         components = " ".join(f"{c:.4f}" for c in self.direction)

@@ -13,7 +13,7 @@ from .analysis import DEFAULT_OTHER_COLOR, ipf_color_modifier
 from .frames import SampleFrame
 from .structures import DEFAULT_STRUCTURES, get_structure
 
-__all__ = ["render_ipf"]
+__all__ = ["render_ipf", "render_result"]
 
 
 def render_ipf(
@@ -146,3 +146,98 @@ def _make_renderer(name: str):
     if name == "opengl":
         return vis.OpenGLRenderer()
     raise ValueError(f"unknown renderer {name!r}")
+
+
+def render_result(
+    result,
+    filename,
+    hide_other: bool = False,
+    slice_normal=None,
+    slice_distance: float | None = None,
+    slice_width: float = 0.0,
+    size=(800, 600),
+    camera_dir=(-1.0, -1.0, -0.5),
+    perspective: bool = True,
+    radius: float | None = None,
+    transparent: bool = False,
+    renderer: str = "auto",
+    show_cell: bool = True,
+):
+    """Render an :class:`~ptmipf.analysis.IPFResult` that has already been computed.
+
+    Unlike :func:`render_ipf` this does not re-run polyhedral template matching:
+    the colours in the result are drawn as they are.  That makes it the way to
+    render a selection, since any subset of a result can be passed in.
+
+    Returns
+    -------
+    str
+        The filename written.
+    """
+    from ovito.data import DataCollection
+    from ovito.pipeline import Pipeline, StaticSource
+    from ovito.vis import Viewport
+
+    positions = result.positions
+    colors = result.colors
+    if hide_other:
+        keep = np.zeros(result.n_atoms, dtype=bool)
+        for structure in result.structures:
+            if structure.colorable:
+                keep |= result.structure_types == result.type_codes[structure.name]
+        positions = positions[keep]
+        colors = colors[keep]
+
+    data = DataCollection()
+    particles = data.create_particles(count=len(positions))
+    particles.create_property("Position", data=positions)
+    particles.create_property("Color", data=colors)
+    if radius is not None:
+        particles.vis.radius = float(radius)
+
+    if result.cell is not None:
+        cell = data.create_cell(np.asarray(result.cell, dtype=float), pbc=(True, True, True))
+        cell.vis.enabled = show_cell
+
+    pipeline = Pipeline(source=StaticSource(data=data))
+
+    if slice_normal is not None:
+        from ovito.modifiers import SliceModifier
+
+        normal = result.frame.direction(slice_normal)
+        if slice_distance is None:
+            slice_distance = float(np.dot(positions.mean(axis=0), normal))
+        pipeline.modifiers.append(
+            SliceModifier(
+                normal=tuple(float(c) for c in normal),
+                distance=float(slice_distance),
+                slab_width=float(slice_width),
+            )
+        )
+
+    pipeline.add_to_scene()
+    try:
+        viewport = Viewport(
+            type=Viewport.Type.Perspective if perspective else Viewport.Type.Ortho,
+            camera_dir=tuple(float(c) for c in camera_dir),
+        )
+        viewport.zoom_all(size=size)
+        for name in (["tachyon", "opengl"] if renderer == "auto" else [renderer]):
+            try:
+                engine = _make_renderer(name)
+            except Exception:
+                continue
+            try:
+                viewport.render_image(
+                    filename=str(filename), size=size, renderer=engine, alpha=transparent
+                )
+                return str(filename)
+            except Exception:
+                if renderer != "auto":
+                    raise
+        raise RuntimeError(
+            "no OVITO renderer could produce an image in this environment; "
+            "write the coloured file with --output and render it elsewhere"
+        )
+    finally:
+        pipeline.remove_from_scene()

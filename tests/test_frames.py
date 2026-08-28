@@ -63,4 +63,6 @@ def test_extra_named_axis_is_kept():
     frame = SampleFrame({"ed": "1,1,0"})
     assert np.allclose(frame.direction("ed"), [np.sqrt(0.5), np.sqrt(0.5), 0])
     assert frame.label("ed") == "ED"
-    assert frame.label("-z") == "-z"
+    # Bare Cartesian axes are upper-cased so plot titles read like EBSD figures.
+    assert frame.label("-z") == "-Z"
+    assert frame.label("1,1,0") == "1,1,0"
