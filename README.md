@@ -218,6 +218,26 @@ pipeline.modifiers.append(PolyhedralTemplateMatchingModifier(output_orientation=
 pipeline.modifiers.append(ipf_color_modifier(direction="z", structures=("hcp",)))
 ```
 
+## Web interface
+
+Everything above is also available as a local web interface, which adds no
+dependencies — the server is standard library only:
+
+```bash
+ptmipf-ui mg.dump                 # analyse and open the browser
+python -m ptmipf.webui --root ~/simulations
+```
+
+[![The web interface](docs/webui_light.png)](docs/webui.md)
+
+Load a configuration, set the structures, sample frame and projection direction, orbit and
+slice the 3D view, build a selection from several criteria (including "the basal-oriented
+grains" and "the grain containing this atom I clicked"), restrict the pole figures and IPF
+density to it, and export everything. Changing only the projection direction re-uses the
+cached PTM result, so recolouring is immediate. The *CLI command* button prints the
+`ptmipf` command line that reproduces the session, so exploration turns straight into a
+scriptable analysis. See [docs/webui.md](docs/webui.md) for the full tour.
+
 ## Conventions
 
 These were determined empirically from OVITO and are asserted by the test suite:

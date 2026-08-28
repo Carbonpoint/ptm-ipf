@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ptm-ipf</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><polygon points='2,14 14,14 8,2' fill='%23c33'/></svg>">
+</head>
+<body>
+<header>
+  <h1>ptm-ipf <span id="version" class="muted"></span></h1>
+  <span id="status" class="status">idle</span>
+  <button id="cmd-button" class="ghost" title="Show the equivalent ptmipf command line" disabled>CLI command</button>
+  <button id="theme-toggle" class="ghost" title="Toggle light/dark theme">◐</button>
+</header>
+
+<div class="layout">
+<aside>
+
+  <details open>
+    <summary>Data</summary>
+    <label>Configuration file
+      <span class="row">
+        <input id="path" type="text" placeholder="path under the served root" spellcheck="false">
+        <button id="browse" class="small" title="Browse the served directory">…</button>
+      </span>
+    </label>
+    <label class="inline">Trajectory frame <input id="frame-index" type="number" value="0" min="0"></label>
+    <button id="analyse" class="primary">Analyse</button>
+    <div id="summary" class="summary" hidden>
+      <div id="summary-head"></div>
+      <div id="counts"></div>
+      <div id="cell" class="muted"></div>
+    </div>
+  </details>
+
+  <details open>
+    <summary>Structure identification</summary>
+    <div id="structures" class="checks"></div>
+    <label class="inline">RMSD cutoff <input id="rmsd" type="number" value="0.1" min="0" step="0.01"
+      title="PTM RMSD cutoff; 0 disables it"></label>
+    <label>Colour only <span class="hint">(others keep the “other” colour)</span></label>
+    <div id="color-only" class="checks"></div>
+    <label class="inline">“Other” colour <input id="other-color" type="color" value="#595959"></label>
+  </details>
+
+  <details>
+    <summary>Sample frame</summary>
+    <p class="hint">Define named axes in cell coordinates, e.g. <code>1,0,0</code>. Missing axes are
+    completed to a right-handed triad.</p>
+    <label class="inline">RD <input id="axis-rd" type="text" placeholder="—" spellcheck="false"></label>
+    <label class="inline">TD <input id="axis-td" type="text" placeholder="—" spellcheck="false"></label>
+    <label class="inline">ND <input id="axis-nd" type="text" placeholder="—" spellcheck="false"></label>
+    <label class="inline">ED <input id="axis-ed" type="text" placeholder="—" spellcheck="false"></label>
+  </details>
+
+  <details open>
+    <summary>IPF projection direction</summary>
+    <div class="row wrap" id="direction-buttons">
+      <button data-dir="x" class="small">x</button>
+      <button data-dir="y" class="small">y</button>
+      <button data-dir="z" class="small">z</button>
+      <button data-dir="rd" class="small">RD</button>
+      <button data-dir="td" class="small">TD</button>
+      <button data-dir="nd" class="small">ND</button>
+      <button data-dir="ed" class="small">ED</button>
+    </div>
+    <label class="inline">Direction <input id="direction" type="text" value="z" spellcheck="false"
+      title="An axis (+z, -x), a named sample axis (rd, td, nd, ed) or a vector (1,1,0)"></label>
+  </details>
+
+  <details open>
+    <summary>Selection</summary>
+    <div id="selection-unavailable" class="hint" hidden>
+      Selection needs the <code>ptmipf.select</code> module, which is not available in this
+      installation.
+    </div>
+    <div id="selection-ui">
+      <div id="criteria"></div>
+      <span class="row">
+        <select id="criterion-kind">
+          <option value="structure">structure</option>
+          <option value="type">particle type</option>
+          <option value="rmsd">RMSD range</option>
+          <option value="region">spatial slab</option>
+          <option value="ipf">orientation near direction</option>
+          <option value="misorientation">misorientation from reference</option>
+        </select>
+        <button id="add-criterion" class="small">+ add</button>
+      </span>
+      <span class="row">
+        <label class="inline">combine
+          <select id="combine-mode"><option value="and">and</option><option value="or">or</option></select>
+        </label>
+        <button id="apply-selection" class="primary small">Apply</button>
+        <button id="clear-selection" class="small">Clear</button>
+      </span>
+      <div id="selection-count" class="muted"></div>
+      <label class="inline">in 3D view
+        <select id="highlight-mode">
+          <option value="highlight">highlight selection</option>
+          <option value="only">show only selection</option>
+          <option value="off">ignore selection</option>
+        </select>
+      </label>
+      <label class="inline"><input id="figures-from-selection" type="checkbox">
+        figures from selection only</label>
+    </div>
+  </details>
+
+  <details open>
+    <summary>Export</summary>
+    <div class="row wrap">
+      <button class="small" data-export="extxyz" data-selection="0">full .xyz</button>
+      <button class="small" data-export="lammps-dump" data-selection="0">full .dump</button>
+      <button class="small" data-export="extxyz" data-selection="1">selection .xyz</button>
+      <button class="small" data-export="lammps-dump" data-selection="1">selection .dump</button>
+    </div>
+  </details>
+
+</aside>
+
+<main>
+  <section class="card viewer-card">
+    <div class="card-head">
+      <h2>IPF map <span id="view-label" class="muted"></span></h2>
+      <span class="row">
+        <label class="inline"><input id="hide-other" type="checkbox"> hide other</label>
+        <label class="inline"><input id="slice-on" type="checkbox"> slice</label>
+        <input id="slice-axis" type="text" value="z" size="4" spellcheck="false" title="slice plane normal">
+        <input id="slice-frac" type="range" min="0" max="100" value="60" title="slice position">
+        <button id="reset-view" class="small" title="Reset the camera">reset</button>
+        <a id="download-view" class="small button" title="Download this view as PNG" download>PNG</a>
+      </span>
+    </div>
+    <div id="view-box" class="view-box">
+      <img id="view" alt="IPF-coloured atoms" draggable="false">
+      <div id="view-placeholder" class="placeholder">Analyse a configuration to see the IPF map.
+        Drag to orbit, scroll to zoom, click an atom for details.</div>
+      <div id="atom-info" class="atom-info" hidden></div>
+    </div>
+  </section>
+
+  <section class="figures">
+    <div class="card">
+      <div class="card-head"><h2>Colour key</h2>
+        <span class="row">
+          <select id="legend-structure" title="structure of the colour key"></select>
+          <a id="download-legend" class="small button" download>PNG</a>
+        </span>
+      </div>
+      <img id="legend" class="figure" alt="IPF colour key">
+    </div>
+    <div class="card">
+      <div class="card-head"><h2>IPF density</h2>
+        <a id="download-density" class="small button" download>PNG</a>
+      </div>
+      <img id="density" class="figure" alt="IPF orientation density">
+    </div>
+    <div class="card wide">
+      <div class="card-head"><h2>Pole figures</h2>
+        <span class="row wrap">
+          <input id="poles" type="text" value="0001,10-10,11-20" size="18" spellcheck="false"
+            title="comma-separated pole families, e.g. 0001,10-10">
+          <label class="inline">c/a <input id="c-over-a" type="number" value="1.633" step="0.001"></label>
+          <select id="pole-mode"><option value="density">density</option><option value="scatter">scatter</option></select>
+          <select id="pole-structure" title="structure whose orientations are plotted"></select>
+          <a id="download-poles" class="small button" download>PNG</a>
+        </span>
+      </div>
+      <img id="polefig" class="figure" alt="pole figures">
+    </div>
+  </section>
+</main>
+</div>
+
+<dialog id="browser-dialog">
+  <h2>Choose a file</h2>
+  <div id="browser-path" class="muted"></div>
+  <ul id="browser-list"></ul>
+  <button id="browser-close" class="small">Cancel</button>
+</dialog>
+
+<dialog id="cmd-dialog">
+  <h2>Equivalent command line</h2>
+  <pre id="cmd-text"></pre>
+  <span class="row">
+    <button id="cmd-copy" class="primary small">Copy</button>
+    <button id="cmd-close" class="small">Close</button>
+  </span>
+</dialog>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

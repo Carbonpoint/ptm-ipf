@@ -1,0 +1,358 @@
+"""Server-side state for the web UI.
+
+The expensive step is polyhedral template matching, so the :class:`AppState`
+keeps the most recent :class:`~ptmipf.analysis.IPFResult` in memory and
+distinguishes settings that require a new PTM run (input file, structure set,
+RMSD cutoff, trajectory frame) from settings that only change the colouring
+(projection direction, sample frame, colour-only set).  The latter are applied
+in place by recomputing colours from the cached orientation quaternions.
+
+All OVITO work is funnelled through a single worker thread: OVITO's scene is
+global and its Qt internals bind to the first thread that runs a pipeline, so
+the many threads of a threading HTTP server must never touch it directly.
+For the same reason the server should live in a process where no other thread
+has used OVITO; ``python -m ptmipf.webui`` guarantees that, and the tests run
+the server as a subprocess.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
+import numpy as np
+
+from ..analysis import DEFAULT_OTHER_COLOR, IPFResult, quaternions_to_matrices
+from ..colorkey import IPFColorKey
+from ..frames import SampleFrame
+from ..structures import DEFAULT_STRUCTURES, get_structure
+from ..symmetry import get_laue_group
+
+__all__ = ["AppState", "SelectionUnavailableError"]
+
+
+class SelectionUnavailableError(RuntimeError):
+    """Raised when the optional :mod:`ptmipf.select` module is missing."""
+
+
+def _select_module():
+    try:
+        from .. import select
+    except ImportError as exc:
+        raise SelectionUnavailableError(
+            "the ptmipf.select module is not available in this installation"
+        ) from exc
+    return select
+
+
+def subset_result(result: IPFResult, mask: np.ndarray) -> IPFResult:
+    """Restrict *result* to the atoms selected by *mask*.
+
+    Prefers :meth:`IPFResult.subset` and falls back to an equivalent local
+    implementation, so the figure endpoints keep working against older
+    versions of the analysis module.
+    """
+    if hasattr(result, "subset"):
+        return result.subset(mask)
+    mask = np.asarray(mask, dtype=bool)
+    counts = {}
+    structure_types = result.structure_types[mask]
+    for s in result.structures:
+        counts[s.name] = int((structure_types == result.type_codes[s.name]).sum())
+    counts["other"] = int(mask.sum() - sum(counts.values()))
+    return dataclasses.replace(
+        result,
+        positions=result.positions[mask],
+        structure_types=structure_types,
+        orientations=result.orientations[mask],
+        colors=result.colors[mask],
+        rmsd=result.rmsd[mask],
+        particle_types=result.particle_types[mask],
+        counts=counts,
+    )
+
+
+def _parse_reference(spec, result: IPFResult):
+    """Turn the JSON reference of a misorientation criterion into the contract's form.
+
+    The contract accepts a rotation matrix, a quaternion or an atom index; the
+    UI offers an atom index (from picking) or an explicit quaternion.
+    """
+    if isinstance(spec, dict):
+        if "atom" in spec:
+            index = int(spec["atom"])
+            if not 0 <= index < result.n_atoms:
+                raise ValueError(f"atom index {index} out of range")
+            return index
+        if "quaternion" in spec:
+            q = np.asarray(spec["quaternion"], dtype=float).reshape(4)
+            return q
+        raise ValueError("misorientation reference needs an 'atom' or 'quaternion' key")
+    if isinstance(spec, (int, np.integer)):
+        return int(spec)
+    return np.asarray(spec, dtype=float)
+
+
+class AppState:
+    """Cached analysis result, selection and job status behind one lock."""
+
+    def __init__(self, root: Path):
+        self.root = Path(root).resolve()
+        self.lock = threading.RLock()
+        # A single thread for everything that touches OVITO (see module docstring).
+        self.ovito = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ovito")
+
+        self.result: IPFResult | None = None
+        self.analysis_params: dict | None = None  # settings that forced the last PTM run
+        self.colour_params: dict = {}
+        self.job = {"state": "idle", "stage": "", "error": "", "started": 0.0}
+        self.selection_mask: np.ndarray | None = None
+        self.selection_criteria: list = []
+        self.selection_mode: str = "and"
+        self.generation = 0  # bumped on every visible change, used for cache busting
+
+    # ------------------------------------------------------------------
+    # paths
+    # ------------------------------------------------------------------
+    def resolve(self, path: str) -> Path:
+        """Resolve *path* against the served root, refusing escapes."""
+        candidate = (self.root / path).resolve() if not Path(path).is_absolute() else (
+            Path(path).resolve()
+        )
+        if candidate != self.root and self.root not in candidate.parents:
+            raise PermissionError(f"{path!r} is outside the served root directory")
+        return candidate
+
+    # ------------------------------------------------------------------
+    # analysis
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _split_params(params: dict) -> tuple[dict, dict]:
+        analysis = {
+            "path": str(params["path"]),
+            "structures": tuple(params.get("structures") or DEFAULT_STRUCTURES),
+            "rmsd_cutoff": float(params.get("rmsd_cutoff", 0.1)),
+            "frame_index": int(params.get("frame_index", 0)),
+        }
+        colour = {
+            "direction": params.get("direction", "z"),
+            "axes": {k: v for k, v in (params.get("axes") or {}).items() if v},
+            "color_only": tuple(params["color_only"]) if params.get("color_only") else None,
+            "other_color": tuple(params.get("other_color") or DEFAULT_OTHER_COLOR),
+        }
+        return analysis, colour
+
+    def submit_analysis(self, params: dict) -> dict:
+        """Run PTM in the background, or just recolour when nothing costly changed."""
+        analysis, colour = self._split_params(params)
+        path = self.resolve(analysis["path"])
+        if not path.is_file():
+            raise FileNotFoundError(f"no such file: {analysis['path']}")
+        analysis["path"] = str(path)
+        for name in analysis["structures"]:
+            get_structure(name)  # fail early on typos
+
+        with self.lock:
+            if self.job["state"] == "running":
+                return {"accepted": False, "reason": "an analysis is already running"}
+            if self.result is not None and analysis == self.analysis_params:
+                self._recolour(colour)
+                return {"accepted": True, "recoloured": True}
+            self.job = {
+                "state": "running",
+                "stage": "running polyhedral template matching",
+                "error": "",
+                "started": time.time(),
+            }
+            self.ovito.submit(self._run_analysis, analysis, colour)
+            return {"accepted": True, "recoloured": False}
+
+    def _run_analysis(self, analysis: dict, colour: dict) -> None:
+        from ..analysis import analyse
+
+        try:
+            frame = SampleFrame(colour["axes"])
+            result = analyse(
+                analysis["path"],
+                direction=colour["direction"],
+                structures=analysis["structures"],
+                frame=frame,
+                frame_index=analysis["frame_index"],
+                rmsd_cutoff=analysis["rmsd_cutoff"],
+                other_color=colour["other_color"],
+                only=colour["color_only"],
+            )
+        except Exception as exc:  # surfaced through /api/status, not a traceback
+            with self.lock:
+                self.job = {"state": "error", "stage": "", "error": str(exc), "started": 0.0}
+            return
+        with self.lock:
+            self.result = result
+            self.analysis_params = analysis
+            self.colour_params = colour
+            self.selection_mask = None
+            self.selection_criteria = []
+            self.job = {"state": "done", "stage": "", "error": "", "started": 0.0}
+            self.generation += 1
+
+    def _recolour(self, colour: dict) -> None:
+        """Recompute colours in place from the cached orientations.
+
+        This mirrors the colouring block of :func:`ptmipf.analysis.analyse`
+        and is what makes changing the projection direction instant.
+        """
+        result = self.result
+        frame = SampleFrame(colour["axes"])
+        d = frame.direction(colour["direction"])
+        colour_these = {
+            get_structure(s).name
+            for s in (colour["color_only"] or [s.name for s in result.structures])
+        }
+        colors = np.tile(np.asarray(colour["other_color"], dtype=float), (result.n_atoms, 1))
+        for s in result.structures:
+            selection = result.structure_types == result.type_codes[s.name]
+            if not s.colorable or s.name not in colour_these or not selection.any():
+                continue
+            key = IPFColorKey(get_laue_group(s.laue))
+            rotations = quaternions_to_matrices(result.orientations[selection])
+            colors[selection] = key.orientation2color(rotations, d)
+        result.colors = colors
+        result.direction = d
+        result.direction_label = frame.label(colour["direction"])
+        result.frame = frame
+        self.colour_params = colour
+        self.generation += 1
+
+    def status(self) -> dict:
+        with self.lock:
+            payload = dict(self.job)
+            if payload["state"] == "running":
+                payload["elapsed"] = round(time.time() - payload.pop("started"), 1)
+            else:
+                payload.pop("started")
+            payload["generation"] = self.generation
+            if self.result is not None:
+                result = self.result
+                payload["result"] = {
+                    "path": self.analysis_params["path"],
+                    "n_atoms": result.n_atoms,
+                    "counts": result.counts,
+                    "direction_label": result.direction_label,
+                    "direction": [round(float(c), 6) for c in result.direction],
+                    "cell": None
+                    if result.cell is None
+                    else np.asarray(result.cell).round(6).tolist(),
+                    "type_names": {str(k): v for k, v in result.type_names.items()},
+                    "structures": [s.name for s in result.structures],
+                    "colorable": [s.name for s in result.structures if s.colorable],
+                    "frame_axes": {
+                        k: np.round(v, 6).tolist() for k, v in result.frame.axes.items()
+                    },
+                    "summary": result.summary(),
+                }
+                if self.selection_mask is not None:
+                    payload["selection"] = {
+                        "count": int(self.selection_mask.sum()),
+                        "criteria": self.selection_criteria,
+                        "mode": self.selection_mode,
+                    }
+            return payload
+
+    # ------------------------------------------------------------------
+    # selection
+    # ------------------------------------------------------------------
+    def apply_selection(self, criteria: list, mode: str = "and") -> dict:
+        select = _select_module()
+        with self.lock:
+            result = self.result
+            if result is None:
+                raise ValueError("no analysis result yet")
+            if not criteria:
+                self.selection_mask = None
+                self.selection_criteria = []
+                self.generation += 1
+                return {"count": None}
+            masks = []
+            for criterion in criteria:
+                mask = self._one_mask(select, result, criterion)
+                if criterion.get("invert"):
+                    mask = select.invert(mask)
+                masks.append(mask)
+            mode = "or" if mode == "or" else "and"
+            combined = masks[0] if len(masks) == 1 else select.combine(*masks, mode=mode)
+            self.selection_mask = np.asarray(combined, dtype=bool)
+            self.selection_criteria = criteria
+            self.selection_mode = mode
+            self.generation += 1
+            return {"count": int(self.selection_mask.sum())}
+
+    @staticmethod
+    def _one_mask(select, result: IPFResult, criterion: dict) -> np.ndarray:
+        kind = criterion.get("kind")
+        if kind == "structure":
+            return select.select_by_structure(result, tuple(criterion["structures"]))
+        if kind == "type":
+            types = [int(t) if str(t).lstrip("-").isdigit() else t for t in criterion["types"]]
+            return select.select_by_type(result, tuple(types))
+        if kind == "rmsd":
+            return select.select_by_rmsd(
+                result,
+                maximum=criterion.get("max"),
+                minimum=criterion.get("min"),
+            )
+        if kind == "region":
+            return select.select_by_region(
+                result,
+                criterion.get("axis", "z"),
+                minimum=criterion.get("min"),
+                maximum=criterion.get("max"),
+            )
+        if kind == "ipf":
+            return select.select_by_ipf_direction(
+                result,
+                criterion["crystal"],
+                criterion["sample"],
+                float(criterion.get("tolerance", 10.0)),
+                criterion["structure"],
+            )
+        if kind == "misorientation":
+            return select.select_by_misorientation(
+                result,
+                _parse_reference(criterion["reference"], result),
+                float(criterion.get("tolerance", 5.0)),
+                criterion["structure"],
+            )
+        raise ValueError(f"unknown selection criterion {kind!r}")
+
+    def selection_subset(self) -> IPFResult:
+        with self.lock:
+            if self.result is None:
+                raise ValueError("no analysis result yet")
+            if self.selection_mask is None:
+                raise ValueError("no selection is active")
+            return subset_result(self.result, self.selection_mask)
+
+    # ------------------------------------------------------------------
+    # atom info (used by picking and misorientation references)
+    # ------------------------------------------------------------------
+    def atom_info(self, index: int) -> dict:
+        with self.lock:
+            result = self.result
+            if result is None or not 0 <= index < result.n_atoms:
+                raise ValueError(f"atom index {index} out of range")
+            code = int(result.structure_types[index])
+            name = next(
+                (n for n, c in result.type_codes.items() if c == code), "other"
+            ) if code else "other"
+            return {
+                "index": index,
+                "position": [round(float(c), 4) for c in result.positions[index]],
+                "structure": name,
+                "rmsd": round(float(result.rmsd[index]), 5),
+                "type": result.type_names.get(int(result.particle_types[index]), ""),
+                "orientation": [round(float(c), 6) for c in result.orientations[index]],
+                "color": [round(float(c), 4) for c in result.colors[index]],
+            }

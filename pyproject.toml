@@ -34,9 +34,14 @@ examples = ["ase>=3.22", "scipy>=1.8"]
 
 [project.scripts]
 ptmipf = "ptmipf.cli:main"
+ptmipf-ui = "ptmipf.webui:main"
 
 [tool.setuptools.packages.find]
 include = ["ptmipf*"]
+
+[tool.setuptools.package-data]
+# The web UI ships its front end (HTML/CSS/JS) inside the package.
+ptmipf = ["webui/static/*"]
 
 [tool.ruff]
 line-length = 100
