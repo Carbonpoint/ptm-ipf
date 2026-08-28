@@ -56,8 +56,9 @@ On a bare Linux machine OVITO also needs the OpenGL runtime:
 ptmipf mg.dump -o mg_ipf.xyz --structures hcp --direction z --legend key.png
 ```
 
-The output file carries the colour as three extra columns, so it can be dropped straight
-into OVITO, VMD or a plotting script. To render the picture directly:
+The output file carries the colour as three extra columns, named so that OVITO binds them
+to the atoms on reload: opening `mg_ipf.xyz` or `mg_ipf.dump` shows the atoms already
+coloured by orientation, with no column mapping to do by hand. To render the picture directly:
 
 ```bash
 ptmipf mg.dump --structures hcp --direction nd \

@@ -54,7 +54,13 @@ def write_extxyz(result, path) -> None:
 
 
 def write_lammps_dump(result, path) -> None:
-    """Write a LAMMPS dump file with ``structure``, ``rmsd`` and ``r g b``."""
+    """Write a LAMMPS dump file whose colours bind to the atoms on reload.
+
+    The column names matter: OVITO maps ``Color.R/G/B`` and ``StructureType``
+    onto its standard particle properties, so the file opens already coloured by
+    orientation.  Plain names such as ``r g b`` would come back as three
+    unrelated per-atom values that have to be mapped by hand.
+    """
     cell = np.asarray(result.cell) if result.cell is not None else None
     with open(path, "w") as handle:
         handle.write("ITEM: TIMESTEP\n")
@@ -72,7 +78,9 @@ def write_lammps_dump(result, path) -> None:
             handle.write("ITEM: BOX BOUNDS pp pp pp\n")
             for axis in range(3):
                 handle.write(f"{lo[axis]:.8f} {hi[axis]:.8f}\n")
-        handle.write("ITEM: ATOMS id type x y z structure rmsd r g b\n")
+        handle.write(
+            "ITEM: ATOMS id type x y z StructureType rmsd Color.R Color.G Color.B\n"
+        )
         for i in range(result.n_atoms):
             x, y, z = result.positions[i]
             r, g, b = result.colors[i]

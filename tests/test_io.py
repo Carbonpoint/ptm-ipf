@@ -53,8 +53,33 @@ def test_lammps_dump_has_the_expected_columns(tmp_path):
     write_result(FakeResult(), path)
     text = path.read_text().splitlines()
     assert text[3] == "2"
-    assert text[8] == "ITEM: ATOMS id type x y z structure rmsd r g b"
+    # The column names are what make OVITO bind the colours to the atoms.
+    assert text[8] == "ITEM: ATOMS id type x y z StructureType rmsd Color.R Color.G Color.B"
     assert len(text[9].split()) == 10
+
+
+def test_dump_colours_bind_to_atoms_in_ovito(tmp_path):
+    """Reopening the dump must give coloured atoms, not loose r/g/b columns."""
+    pytest.importorskip("ovito")
+    from ovito.io import import_file
+
+    path = tmp_path / "out.dump"
+    write_result(FakeResult(), path)
+    data = import_file(str(path)).compute()
+    assert "Color" in data.particles
+    assert "Structure Type" in data.particles
+    assert np.allclose(data.particles["Color"][0], [1.0, 0.0, 0.0])
+
+
+def test_extxyz_colours_bind_to_atoms_in_ovito(tmp_path):
+    pytest.importorskip("ovito")
+    from ovito.io import import_file
+
+    path = tmp_path / "out.xyz"
+    write_result(FakeResult(), path)
+    data = import_file(str(path)).compute()
+    assert "Color" in data.particles
+    assert np.allclose(data.particles["Color"][0], [1.0, 0.0, 0.0])
 
 
 def test_unknown_format_is_rejected(tmp_path):
