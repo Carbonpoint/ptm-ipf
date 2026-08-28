@@ -11,7 +11,7 @@ import re
 
 import numpy as np
 
-from .legend import _format_indices, _sector_edge_points
+from .legend import _format_indices, _sector_edge_points, place_vertex_labels
 from .projections import equal_area, stereographic, upper_hemisphere
 from .symmetry import LaueGroup, get_laue_group
 
@@ -355,30 +355,20 @@ def ipf_density(
     mean = np.nanmean(density)
     mrd = density / mean if mean > 0 else density
 
-    fig, ax = plt.subplots(figsize=(4.0, 3.4))
+    # Wide enough, with the bar pushed out, that the corner labels of the
+    # sector do not run into the colour bar.
+    fig, ax = plt.subplots(figsize=(4.8, 3.4))
     contour = ax.contourf(gx, gy, mrd, levels=contours, cmap=cmap, zorder=2)
-    bar = fig.colorbar(contour, ax=ax, fraction=0.046, pad=0.08)
+    bar = fig.colorbar(contour, ax=ax, fraction=0.046, pad=0.16)
     bar.set_label("MRD", fontsize=9)
     ax.plot(ex, ey, color="black", lw=1.0, zorder=3)
 
-    vx, vy = stereographic(laue.sector_vertices)
-    centroid = np.array([vx.mean(), vy.mean()])
-    for px, py, label in zip(vx, vy, laue.vertex_labels):
-        offset = np.array([px, py]) - centroid
-        offset = offset / np.linalg.norm(offset) * 0.06
-        ax.text(
-            px + offset[0],
-            py + offset[1],
-            _format_indices(label),
-            ha="center",
-            va="center",
-            fontsize=10,
-        )
+    place_vertex_labels(ax, laue, fontsize=10)
 
     ax.set_title(f"IPF {frame.label(direction)}  ({laue.name})", fontsize=11, pad=18)
     ax.set_aspect("equal")
     ax.axis("off")
-    ax.margins(0.12)
+    ax.margins(0.26)
     fig.tight_layout()
     if filename is not None:
         fig.savefig(filename, dpi=dpi)

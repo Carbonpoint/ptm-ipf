@@ -79,6 +79,32 @@ def _sector_edge_points(laue: LaueGroup, n: int = 200) -> np.ndarray:
     return np.vstack(segments)
 
 
+def place_vertex_labels(ax, laue: LaueGroup, fontsize: int = 11) -> None:
+    """Label the sector corners, clear of the sector itself.
+
+    Shared by the colour key and the orientation density plot so that both keep
+    the labels off the data; a layout check on the density plot found them
+    sitting on the contours when each drew its own.
+    """
+    vx, vy = stereographic(laue.sector_vertices)
+    center = np.array([vx.mean(), vy.mean()])
+    span = max(vx.max() - vx.min(), vy.max() - vy.min())
+    gap = 0.16 * span
+    for x, y, label in zip(vx, vy, laue.vertex_labels):
+        offset = np.array([x, y]) - center
+        norm = np.linalg.norm(offset)
+        offset = offset / norm * gap if norm > 1e-9 else np.array([0.0, gap])
+        ax.text(
+            x + offset[0],
+            y + offset[1],
+            _format_indices(label),
+            ha="center",
+            va="center",
+            fontsize=fontsize,
+            zorder=3,
+        )
+
+
 def ipf_legend(
     laue,
     direction_label: str = "",
@@ -131,25 +157,7 @@ def ipf_legend(
     ex, ey = stereographic(edge)
     ax.plot(ex, ey, color="black", linewidth=1.0, zorder=2)
 
-    vx, vy = stereographic(laue.sector_vertices)
-    center = np.array([vx.mean(), vy.mean()])
-    # Push the labels clear of the sector: they sit outside the coloured area
-    # with a visible gap, never touching the boundary.
-    span = max(vx.max() - vx.min(), vy.max() - vy.min())
-    gap = 0.16 * span
-    for x, y, label in zip(vx, vy, laue.vertex_labels):
-        offset = np.array([x, y]) - center
-        norm = np.linalg.norm(offset)
-        offset = offset / norm * gap if norm > 1e-9 else np.array([0.0, gap])
-        ax.text(
-            x + offset[0],
-            y + offset[1],
-            _format_indices(label),
-            ha="center",
-            va="center",
-            fontsize=11,
-            zorder=3,
-        )
+    place_vertex_labels(ax, laue)
 
     title = " ".join(part for part in (structure_label, laue.name) if part)
     if direction_label:

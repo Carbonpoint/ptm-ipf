@@ -13,7 +13,15 @@ from .analysis import DEFAULT_OTHER_COLOR, ipf_color_modifier
 from .frames import SampleFrame
 from .structures import DEFAULT_STRUCTURES, get_structure
 
-__all__ = ["render_ipf", "render_result"]
+__all__ = ["render_ipf", "render_result", "TRIPOD_MARGIN"]
+
+#: Framing used for a triad when the corner is already clear.
+TRIPOD_MARGIN = 1.15
+#: Never pull the camera back further than this to make room for a triad.
+MAX_TRIPOD_MARGIN = 1.7
+#: Fraction of the image, from the lower left corner, that a triad occupies.
+#: Measured from rendered images, with room for the axis labels around it.
+TRIPOD_BOX = (0.23, 0.21)
 
 
 def render_ipf(
@@ -164,6 +172,44 @@ def _tripod_overlay(frame, labels=("rd", "td", "nd"), size: float = 0.11):
     return tripod
 
 
+def _corner_is_clear(image_path, box=TRIPOD_BOX, threshold: float = 0.97) -> bool:
+    """True when the lower left corner of a rendered image is empty.
+
+    The triad is drawn there, so anything already in that corner would end up
+    underneath it.  Checking the rendered pixels is the only reliable test:
+    the silhouette of a cell depends on the camera, the aspect ratio and
+    whichever atoms are hidden.  The threshold is loose enough to catch a cell
+    wireframe that antialiasing has faded to pale grey in the probe.
+    """
+    try:
+        from PIL import Image
+    except ImportError:  # pragma: no cover - Pillow ships with matplotlib
+        return True
+    with Image.open(image_path) as handle:
+        pixels = np.asarray(handle.convert("L"), dtype=float) / 255.0
+    height, width = pixels.shape
+    corner = pixels[int(height * (1.0 - box[1])) :, : int(width * box[0])]
+    return bool(corner.min() >= threshold)
+
+
+def _margin_clearing_the_triad(render_probe, start=TRIPOD_MARGIN) -> float:
+    """Smallest framing that leaves the triad corner empty.
+
+    *render_probe* draws a small image at a given margin; a few of those cost
+    far less than a figure that has to be redrawn by hand.
+    """
+    import tempfile
+
+    margin = start
+    while margin <= MAX_TRIPOD_MARGIN:
+        with tempfile.NamedTemporaryFile(suffix=".png") as probe:
+            render_probe(margin, probe.name)
+            if _corner_is_clear(probe.name):
+                return margin
+        margin += 0.08
+    return MAX_TRIPOD_MARGIN
+
+
 def _make_renderer(name: str):
     from ovito import vis
 
@@ -190,6 +236,8 @@ def render_result(
     show_cell: bool = True,
     tripod: bool = False,
     tripod_axes=("rd", "td", "nd"),
+    margin: float | None = None,
+    info: dict | None = None,
 ):
     """Render an :class:`~ptmipf.analysis.IPFResult` that has already been computed.
 
@@ -250,6 +298,30 @@ def render_result(
             camera_dir=tuple(float(c) for c in camera_dir),
         )
         viewport.zoom_all(size=size)
+        fitted_fov = viewport.fov
+
+        scene_margin = margin or 1.0
+        if tripod and margin is None:
+            # Pull the camera back until the triad's corner is empty, measuring
+            # small probe renders rather than guessing a fixed number: how much
+            # room is needed depends on the camera, the aspect and what is hidden.
+            def probe(candidate, path):
+                viewport.fov = fitted_fov * candidate
+                probe_width = 480
+                viewport.render_image(
+                    filename=path,
+                    size=(probe_width, max(1, int(probe_width * size[1] / size[0]))),
+                    renderer=_make_renderer("opengl"),
+                )
+
+            try:
+                scene_margin = _margin_clearing_the_triad(probe)
+            except Exception:
+                scene_margin = TRIPOD_MARGIN
+
+        viewport.fov = fitted_fov * float(scene_margin)
+        if info is not None:
+            info["margin"] = float(scene_margin)
         if tripod:
             viewport.overlays.append(_tripod_overlay(result.frame, tripod_axes))
         for name in (["tachyon", "opengl"] if renderer == "auto" else [renderer]):
