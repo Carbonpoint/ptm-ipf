@@ -107,6 +107,33 @@ that counts as a boundary (5 degrees), and `--flat-map-raw` paints the unindexed
 instead of filling the map from the indexed ones, which shows how wide the boundaries
 really are.
 
+### Unit cell wireframes
+
+A flat map can carry a unit cell on each grain: a hexagonal prism for hcp or a cube for
+cubic, rotated into the grain's mean orientation and projected onto the section, with the
+far edges drawn fainter. It shows the whole orientation where the colour shows one
+direction, which is how EBSD software annotates a map.
+
+```bash
+ptmipf mg.dump --structures hcp --direction nd --fill-boundaries 6 \
+    --view nd --slice-width 10 --flat-map map.png --wireframes
+```
+
+Grains within `--wireframe-tolerance` (5 degrees) count as one orientation, and grains
+smaller than `--wireframe-min-area` pixels get no cell. By default each cell is sized in
+proportion to the square root of its grain's area, so it stays readable on a small grain
+without dominating a large one; `--wireframe-size` fixes the edge length in angstrom and
+`--wireframe-scale` multiplies either. `--wireframe-color` is `invert`, the inverse of the
+grain colour underneath, or any matplotlib colour. `--wireframe-one-per-orientation` draws
+one cell per orientation class on its largest grain.
+
+```python
+from ptmipf.wireframe import grain_wireframes
+
+frames = grain_wireframes(flat, tolerance_deg=5, color="invert", c_over_a=1.6236)
+save_flat_map(flat, "map.png", wireframes=frames)
+```
+
 ### Filling the grain boundaries
 
 PTM gives no orientation to disordered atoms, so grain boundaries appear as gaps. They can

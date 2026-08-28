@@ -164,6 +164,49 @@ def build_parser() -> argparse.ArgumentParser:
     group.add_argument(
         "--no-scale-bar", action="store_true", help="omit the scale bar on the flat map"
     )
+    group.add_argument(
+        "--wireframes",
+        action="store_true",
+        help="draw a unit cell wireframe on each distinct orientation of the flat map",
+    )
+    group.add_argument(
+        "--wireframe-tolerance",
+        type=float,
+        default=5.0,
+        metavar="DEG",
+        help="grains within this misorientation count as one orientation (default: 5)",
+    )
+    group.add_argument(
+        "--wireframe-size",
+        type=float,
+        metavar="ANGSTROM",
+        help="a fixed cell edge length; by default cells scale with the grain area",
+    )
+    group.add_argument(
+        "--wireframe-scale",
+        type=float,
+        default=1.0,
+        help="multiplier on the wireframe size, fixed or proportional (default: 1)",
+    )
+    group.add_argument(
+        "--wireframe-color",
+        default="invert",
+        help="'invert' for the inverse of the grain colour, or any matplotlib "
+        "colour such as black or '#ffffff' (default: invert)",
+    )
+    group.add_argument(
+        "--wireframe-min-area",
+        type=int,
+        default=200,
+        metavar="PIXELS",
+        help="grains smaller than this get no wireframe (default: 200)",
+    )
+    group.add_argument(
+        "--wireframe-one-per-orientation",
+        action="store_true",
+        help="one wireframe per orientation class, on its largest grain, rather "
+        "than one on every grain",
+    )
 
     group = parser.add_argument_group(
         "selection",
@@ -574,12 +617,27 @@ def main(argv=None) -> int:
             structure=args.orientation_structure,
             fill_unindexed=not args.flat_map_raw,
         )
+        wireframes = None
+        if args.wireframes:
+            from .wireframe import grain_wireframes
+
+            wireframes = grain_wireframes(
+                flat,
+                tolerance_deg=args.wireframe_tolerance,
+                min_area_pixels=args.wireframe_min_area,
+                size=args.wireframe_size,
+                scale=args.wireframe_scale,
+                color=args.wireframe_color,
+                c_over_a=args.c_over_a if args.c_over_a is not None else float(np.sqrt(8.0 / 3.0)),
+                one_per_orientation=args.wireframe_one_per_orientation,
+            )
         save_flat_map(
             flat,
             args.flat_map,
             scale_bar=not args.no_scale_bar,
             title=f"IPF {result.direction_label}",
             dpi=args.dpi,
+            wireframes=wireframes,
         )
         if not args.quiet:
             print(

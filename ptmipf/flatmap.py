@@ -37,6 +37,14 @@ class FlatMap:
     boundary_fraction: float
     n_grains: int = 0
     labels: np.ndarray | None = None  #: grain label per pixel, -1 outside
+    #: Rows are the in-plane horizontal and vertical axes and the view normal,
+    #: in cell coordinates, so crystal directions can be projected onto the map.
+    basis: np.ndarray | None = None
+    #: Crystal-to-sample rotation per pixel's nearest atom, shape (rows, cols, 3, 3),
+    #: only kept when grains were segmented; None otherwise.
+    orientation_index: np.ndarray | None = None
+    rotations: np.ndarray | None = None
+    laue: str | None = None
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -230,6 +238,8 @@ def flat_ipf_map(
     boundary = np.zeros((rows, columns), dtype=bool)
     labels = None
     n_grains = 0
+    kept_rotations = None
+    kept_laue = None
 
     if boundary_angle and boundary_angle > 0:
         from .analysis import quaternions_to_matrices
@@ -238,6 +248,8 @@ def flat_ipf_map(
         laue = get_laue_group(get_structure(dominant).laue)
         rotations = quaternions_to_matrices(orientations)
         indexed = structure_types != 0
+        kept_rotations = rotations
+        kept_laue = laue.name
         if segment:
             labels = _segment_grains(
                 index_2d, inside_2d, rotations, indexed, laue, boundary_angle
@@ -259,6 +271,7 @@ def flat_ipf_map(
             )
         picture[boundary] = np.asarray(boundary_color, dtype=float)
 
+    basis = np.stack([horizontal, vertical, normal])
     return FlatMap(
         rgb=np.clip(picture, 0.0, 1.0),
         extent=(left, right, bottom, top),
@@ -272,6 +285,10 @@ def flat_ipf_map(
         boundary_fraction=float(boundary.mean()) if boundary.size else 0.0,
         n_grains=n_grains,
         labels=labels,
+        basis=basis,
+        orientation_index=index_2d if labels is not None else None,
+        rotations=kept_rotations if labels is not None else None,
+        laue=kept_laue if labels is not None else None,
     )
 
 
@@ -450,6 +467,8 @@ def save_flat_map(
     axes_labels: bool = True,
     title: str | None = None,
     dpi: int = 200,
+    wireframes=None,
+    wireframe_linewidth: float = 1.4,
 ):
     """Draw *flat_map*, writing it to *filename* unless that is None.
 
@@ -483,6 +502,11 @@ def save_flat_map(
 
     if scale_bar:
         _draw_scale_bar(ax, flat_map)
+
+    if wireframes:
+        from .wireframe import draw_wireframes
+
+        draw_wireframes(ax, wireframes, linewidth=wireframe_linewidth)
 
     if filename is not None:
         fig.savefig(filename, dpi=dpi)
