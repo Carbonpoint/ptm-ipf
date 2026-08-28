@@ -106,13 +106,22 @@ class Handler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------------
     # plumbing
     # ------------------------------------------------------------------
-    def _send(self, body: bytes, content_type: str, status: int = 200, download: str | None = None):
+    def _send(
+        self,
+        body: bytes,
+        content_type: str,
+        status: int = 200,
+        download: str | None = None,
+        extra_headers: dict | None = None,
+    ):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         if download:
             self.send_header("Content-Disposition", f'attachment; filename="{download}"')
+        for name, value in (extra_headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -159,6 +168,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/figure/legend": self._get_legend,
             "/api/figure/poles": self._get_poles,
             "/api/figure/ipfdensity": self._get_ipf_density,
+            "/api/figure/flatmap": self._get_flat_map,
             "/api/export": self._get_export,
             "/api/atom": self._get_atom,
             "/api/slicebounds": self._get_slice_bounds,
@@ -230,8 +240,11 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"path": relative, "at_root": directory == state.root, "entries": entries})
 
     # -- images -------------------------------------------------------
-    def _result_or_409(self):
-        result = self.state.result
+    def _result_or_409(self, query=None):
+        """The cached result, optionally with the grain boundaries filled in."""
+        radius = _number(query, "fill_radius", 0.0) if query else 0.0
+        minimum = int(_number(query, "fill_min_neighbours", 3)) if query else 3
+        result = self.state.view_result(radius or None, minimum)
         if result is None:
             raise ApiError("no analysis result yet", HTTPStatus.CONFLICT)
         return result
@@ -239,7 +252,7 @@ class Handler(BaseHTTPRequestHandler):
     def _view_options(self, query) -> dict:
         """Decode the viewer options shared by the render and pick endpoints."""
         state = self.state
-        result = self._result_or_409()
+        result = self._result_or_409(query)
         options = {
             "azimuth": _number(query, "az", -125.0),
             "elevation": _number(query, "el", 20.0),
@@ -249,6 +262,7 @@ class Handler(BaseHTTPRequestHandler):
                 int(_number(query, "h", 700)),
             ),
             "hide_other": _flag(query, "hide_other"),
+            "tripod": _flag(query, "tripod"),
         }
         axis = query.get("slice_axis", [""])[0]
         if axis:
@@ -266,7 +280,7 @@ class Handler(BaseHTTPRequestHandler):
     def _get_render(self, query):
         state = self.state
         with state.lock:
-            result = self._result_or_409()
+            result = self._result_or_409(query)
             options = self._view_options(query)
             transparent = _flag(query, "transparent")
             with tempfile.NamedTemporaryFile(suffix=".png") as handle:
@@ -282,15 +296,25 @@ class Handler(BaseHTTPRequestHandler):
         self._send(body, "image/png", download=download)
 
     def _figure_result(self, query):
-        """The full result, or the current selection when ``selection=1``."""
+        """The full result, or the current selection when ``selection=1``.
+
+        Filling happens before any subsetting: an atom needs its neighbours to
+        borrow an orientation from, and a selection may have removed them.
+        """
+        result = self._result_or_409(query)
         if _flag(query, "selection"):
-            return self.state.selection_subset()
-        return self._result_or_409()
+            from .state import subset_result
+
+            mask = self.state.selection_mask
+            if mask is None:
+                raise ApiError("no selection has been applied")
+            return subset_result(result, mask)
+        return result
 
     def _get_legend(self, query):
         state = self.state
         with state.lock:
-            result = self._result_or_409()
+            result = self._result_or_409(query)
             body = figures.legend_png(result, query.get("structure", [None])[0])
         download = None
         if _flag(query, "download"):
@@ -324,6 +348,26 @@ class Handler(BaseHTTPRequestHandler):
             )
         download = "ipf_density.png" if _flag(query, "download") else None
         self._send(body, "image/png", download=download)
+
+    def _get_flat_map(self, query):
+        """A flat, EBSD-style orientation map of a section."""
+        state = self.state
+        with state.lock:
+            result = self._figure_result(query)
+            body, info = figures.flat_map_png(
+                result,
+                view=query.get("view", ["z"])[0] or "z",
+                slab_width=_number(query, "slab_width", 10.0),
+                pixel_size=_number(query, "pixel_size", 0.5),
+                boundary_angle=_number(query, "boundary_angle", 5.0),
+                fill_unindexed=not _flag(query, "raw"),
+                structure=query.get("structure", [None])[0],
+            )
+        download = "ipf_flat_map.png" if _flag(query, "download") else None
+        self._send(body, "image/png", download=download, extra_headers={
+            "X-Grain-Count": str(info["n_grains"]),
+            "X-Map-Size": f"{info['columns']}x{info['rows']}",
+        })
 
     def _get_export(self, query):
         from ..io import write_result

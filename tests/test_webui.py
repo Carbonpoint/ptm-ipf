@@ -381,3 +381,57 @@ def test_selection_cleared(base, analysed):
     with pytest.raises(urllib.error.HTTPError) as excinfo:
         _get(base, "/api/export?format=extxyz&selection=1")
     assert excinfo.value.code == 400
+
+
+def test_flat_map_endpoint(base, analysed):
+    """The flat map is served, and reports what it found in the headers."""
+    status, headers, body = _get(
+        base,
+        "/api/figure/flatmap?view=z&slab_width=10&pixel_size=0.8&boundary_angle=5",
+    )
+    assert status == 200
+    assert headers["Content-Type"] == "image/png"
+    assert int(headers["X-Grain-Count"]) >= 1
+    assert "x" in headers["X-Map-Size"]
+    assert _decode_png(body).ndim == 3
+
+
+def test_flat_map_pixel_size_changes_the_resolution(base, analysed):
+    coarse = _get(base, "/api/figure/flatmap?view=z&pixel_size=2.0")[1]["X-Map-Size"]
+    fine = _get(base, "/api/figure/flatmap?view=z&pixel_size=0.5")[1]["X-Map-Size"]
+    assert int(fine.split("x")[0]) > int(coarse.split("x")[0])
+
+
+def test_boundary_filling_is_a_no_op_on_a_fully_indexed_crystal(base, analysed):
+    """The served crystal has no unindexed atoms, so filling must change nothing.
+
+    That filling does colour the boundaries is covered at the library level in
+    tests/test_fill_integration.py, where a configuration with unindexed atoms
+    can be constructed.
+    """
+    plain = _decode_png(_get(base, "/api/render?w=260&h=220")[2])
+    filled = _decode_png(_get(base, "/api/render?w=260&h=220&fill_radius=6")[2])
+    assert np.allclose(plain, filled, atol=0.02)
+
+
+def test_fill_parameters_are_accepted_by_every_image_endpoint(base, analysed):
+    for path in (
+        "/api/render?w=200&h=160&fill_radius=6&fill_min_neighbours=4",
+        "/api/figure/poles?poles=0001&fill_radius=6",
+        "/api/figure/ipfdensity?fill_radius=6",
+        "/api/figure/flatmap?view=z&pixel_size=1.0&fill_radius=6",
+    ):
+        status, headers, body = _get(base, path)
+        assert status == 200, path
+        assert headers["Content-Type"] == "image/png", path
+        assert _decode_png(body).ndim == 3, path
+
+
+def test_tripod_overlay_renders_and_picking_still_works(base, analysed):
+    _, _, body = _get(base, "/api/render?w=300&h=240&tripod=1")
+    assert _decode_png(body).shape[:2] == (240, 300)
+    # The pick endpoint receives the same options, including ones it must ignore.
+    picked = _post_json(
+        base, "/api/pick", {"x": 150, "y": 120, "w": 300, "h": 240, "tripod": True}
+    )
+    assert "atom" in picked or "index" in picked or picked == {}

@@ -113,6 +113,7 @@ class AppState:
         self.selection_criteria: list = []
         self.selection_mode: str = "and"
         self.generation = 0  # bumped on every visible change, used for cache busting
+        self._fill_cache: tuple | None = None  # (radius, min_neighbours, generation)
 
     # ------------------------------------------------------------------
     # paths
@@ -225,6 +226,29 @@ class AppState:
         result.frame = frame
         self.colour_params = colour
         self.generation += 1
+
+    def view_result(self, fill_radius=None, fill_min_neighbours: int = 3) -> IPFResult | None:
+        """The cached result, with the boundary atoms filled in if asked.
+
+        Filling is cached against the generation counter, so it is paid for once
+        and thrown away as soon as the colours or the analysis change.
+        """
+        with self.lock:
+            result = self.result
+            if result is None or not fill_radius:
+                return result
+            key = (float(fill_radius), int(fill_min_neighbours), self.generation)
+            if self._fill_cache is not None and self._fill_cache[0] == key:
+                return self._fill_cache[1]
+
+        from ..fill import fill_boundary_orientations
+
+        filled = fill_boundary_orientations(
+            result, radius=float(fill_radius), min_neighbours=int(fill_min_neighbours)
+        )
+        with self.lock:
+            self._fill_cache = (key, filled)
+        return filled
 
     def status(self) -> dict:
         with self.lock:

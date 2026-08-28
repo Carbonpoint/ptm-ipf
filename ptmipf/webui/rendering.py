@@ -108,6 +108,7 @@ def render_scene(
     selection_mode: str = "highlight",
     transparent: bool = False,
     radius: float | None = None,
+    tripod: bool = False,
 ) -> str:
     """Render *result* to a PNG file and return the filename.
 
@@ -155,6 +156,10 @@ def render_scene(
         # For an orthographic viewport, fov is half the vertical extent in
         # world units (verified against rendered pixel positions).
         viewport.fov = _fov(scene_radius, zoom)
+        if tripod:
+            from ..render import _tripod_overlay
+
+            viewport.overlays.append(_tripod_overlay(result.frame))
         try:
             engine = _opengl_renderer()
             viewport.render_image(
@@ -202,7 +207,17 @@ def pick_atom(
     visible atoms whose projection lies within *tolerance_px* of the click,
     the one nearest the camera wins, which matches what the eye sees.
     """
-    visible = visible_mask(result, **mask_kwargs)
+    # The caller passes the whole view option set, which also carries camera and
+    # overlay settings; only the ones that decide visibility belong here.
+    mask_keys = (
+        "hide_other",
+        "slice_normal",
+        "slice_distance",
+        "slice_width",
+        "selection",
+        "selection_mode",
+    )
+    visible = visible_mask(result, **{k: v for k, v in mask_kwargs.items() if k in mask_keys})
     if not visible.any():
         return None
     indices = np.flatnonzero(visible)

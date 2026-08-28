@@ -36,7 +36,14 @@ header):
   cached result. Drag to orbit, scroll to zoom, cut the cell open with the
   slice control, and hide the unidentified grain-boundary atoms. Click an
   atom to see its position, structure, RMSD and orientation, and to use it
-  as a misorientation reference.
+  as a misorientation reference. A triad button labels the sample axes.
+* **Boundary filling**: the same interpolation as `--fill-boundaries`, with a
+  radius and a minimum neighbour count. It applies to the 3D view and to every
+  figure, and is cached, so turning it on costs one pass and nothing after that.
+* **Flat orientation map**: a section rasterised into an EBSD-style map of
+  colours and grain boundaries, with controls for the view axis, the slab
+  thickness, the pixel size and the boundary angle, and a raw mode that paints
+  the unindexed atoms black. The grain count is reported under the map.
 * **Sections**: the slice control cuts the cell open; giving it a thickness keeps a slab
   of that many angstroms instead, and the X/Y/Z buttons look straight down an axis, which
   turns the slab into an EBSD-style orientation map of a section.

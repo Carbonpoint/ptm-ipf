@@ -451,7 +451,11 @@ def save_flat_map(
     title: str | None = None,
     dpi: int = 200,
 ):
-    """Write *flat_map* to a PNG, optionally with a scale bar and axis labels."""
+    """Draw *flat_map*, writing it to *filename* unless that is None.
+
+    Returns the figure either way, so a caller that streams the image can take
+    it from there.
+    """
     import matplotlib.pyplot as plt
 
     height, width = flat_map.shape
@@ -480,7 +484,8 @@ def save_flat_map(
     if scale_bar:
         _draw_scale_bar(ax, flat_map)
 
-    fig.savefig(filename, dpi=dpi)
+    if filename is not None:
+        fig.savefig(filename, dpi=dpi)
     return fig
 
 

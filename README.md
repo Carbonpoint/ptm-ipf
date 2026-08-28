@@ -82,7 +82,8 @@ on an axis looking down it, orthographically, so grains appear as flat coloured 
 with the grain boundaries between them. `--view` accepts an axis, a named sample axis or a
 vector, `--perspective` restores the perspective camera, and `--tripod` draws a coordinate
 triad labelled with the sample axes. The web interface has the same
-controls: a thickness box beside the slice slider, and X/Y/Z buttons for the axial views.
+controls: a thickness box beside the slice slider, X/Y/Z buttons for the axial views, a
+triad toggle, boundary filling, and a flat orientation map panel.
 
 ### Flat orientation maps
 

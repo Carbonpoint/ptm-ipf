@@ -212,8 +212,58 @@ function viewQuery(extra) {
     params.set("slice_frac", ($("slice-frac").value / 100).toFixed(3));
     params.set("slice_width", $("slice-width").value || 0);
   }
+  addFillParams(params);
+  if ($("tripod") && $("tripod").checked) params.set("tripod", 1);
   for (const [key, value] of Object.entries(extra || {})) params.set(key, value);
   return params;
+}
+
+// Boundary filling changes every image the server draws, so it travels with
+// each request instead of being part of the cached analysis settings.
+function addFillParams(params) {
+  if ($("fill-on") && $("fill-on").checked) {
+    params.set("fill_radius", $("fill-radius").value || 6);
+    params.set("fill_min_neighbours", $("fill-min").value || 3);
+  }
+  return params;
+}
+
+function flatMapQuery(extra) {
+  const params = new URLSearchParams({
+    view: $("flat-view").value.trim() || "z",
+    slab_width: $("flat-slab").value || 10,
+    pixel_size: $("flat-pixel").value || 0.5,
+    boundary_angle: $("flat-angle").value || 0,
+    gen: state.generation,
+  });
+  if ($("flat-raw").checked) params.set("raw", 1);
+  if ($("figures-from-selection").checked && state.selectionCount !== null) {
+    params.set("selection", 1);
+  }
+  addFillParams(params);
+  for (const [key, value] of Object.entries(extra || {})) params.set(key, value);
+  return params;
+}
+
+async function refreshFlatMap() {
+  if (state.generation < 0) return;
+  const info = $("flat-info");
+  info.textContent = "drawing...";
+  try {
+    const response = await fetch("/api/figure/flatmap?" + flatMapQuery());
+    if (!response.ok) throw new Error((await response.json()).error || "flat map failed");
+    const grains = response.headers.get("X-Grain-Count");
+    const size = response.headers.get("X-Map-Size");
+    const blob = await response.blob();
+    const img = $("flatmap");
+    const old = img.src;
+    img.src = URL.createObjectURL(blob);
+    if (old && old.startsWith("blob:")) URL.revokeObjectURL(old);
+    $("download-flat").href = "/api/figure/flatmap?" + flatMapQuery({ download: 1 });
+    info.textContent = `${grains} grains, ${size} px`;
+  } catch (error) {
+    info.textContent = error.message;
+  }
 }
 
 async function refreshView() {
@@ -671,6 +721,14 @@ async function init() {
   $("slice-axis").addEventListener("change", debouncedView);
   $("slice-frac").addEventListener("input", debouncedView);
   $("slice-width").addEventListener("input", debouncedView);
+  $("tripod").addEventListener("change", debouncedView);
+  for (const id of ["fill-on", "fill-radius", "fill-min"]) {
+    $(id).addEventListener("change", () => {
+      refreshView();
+      refreshFigures();
+    });
+  }
+  $("flat-draw").addEventListener("click", refreshFlatMap);
   // Look straight down an axis, which turns a slab into an EBSD-style section.
   const axisViews = { "view-x": [0, 0], "view-y": [90, 0], "view-z": [-90, 89.9] };
   for (const [id, [az, el]] of Object.entries(axisViews)) {

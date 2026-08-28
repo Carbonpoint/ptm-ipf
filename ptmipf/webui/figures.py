@@ -105,3 +105,38 @@ def ipf_density_png(
         max_orientations=max_orientations,
     )
     return figure_png(fig, dpi=dpi)
+
+
+def flat_map_png(
+    result,
+    view: str = "z",
+    slab_width: float = 10.0,
+    pixel_size: float = 0.5,
+    boundary_angle: float = 5.0,
+    fill_unindexed: bool = True,
+    structure: str | None = None,
+    dpi: int = 130,
+) -> tuple[bytes, dict]:
+    """A flat orientation map of a section, plus what it found.
+
+    Returns the PNG and a summary, so the page can report the grain count and
+    the size of the map without decoding the image.
+    """
+    from ..flatmap import flat_ipf_map, save_flat_map
+
+    flat = flat_ipf_map(
+        result,
+        view=view,
+        slab_width=slab_width,
+        pixel_size=pixel_size,
+        boundary_angle=boundary_angle,
+        structure=structure or default_plot_structure(result, structure),
+        fill_unindexed=fill_unindexed,
+    )
+    fig = save_flat_map(flat, None, title=f"IPF {result.direction_label}")
+    info = {
+        "n_grains": flat.n_grains,
+        "rows": flat.shape[0],
+        "columns": flat.shape[1],
+    }
+    return figure_png(fig, dpi=dpi), info

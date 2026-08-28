@@ -56,6 +56,22 @@
   </details>
 
   <details open>
+    <summary>Boundary filling</summary>
+    <label class="inline"><input id="fill-on" type="checkbox"> fill unindexed atoms</label>
+    <div class="row wrap">
+      <label class="inline">radius
+        <input id="fill-radius" type="number" min="1" step="0.5" value="6" size="4"></label>
+      <span class="muted">&#8491;</span>
+      <label class="inline">min neighbours
+        <input id="fill-min" type="number" min="1" step="1" value="3" size="3"></label>
+    </div>
+    <p class="muted note">
+      Unindexed atoms take the average orientation of the indexed atoms within the
+      radius. An interpolation, not a measurement.
+    </p>
+  </details>
+
+  <details open>
     <summary>IPF projection direction</summary>
     <div class="row wrap" id="direction-buttons">
       <button data-dir="x" class="small">x</button>
@@ -127,6 +143,7 @@
       <h2>IPF map <span id="view-label" class="muted"></span></h2>
       <span class="row">
         <label class="inline"><input id="hide-other" type="checkbox"> hide other</label>
+        <label class="inline"><input id="tripod" type="checkbox"> triad</label>
         <label class="inline"><input id="slice-on" type="checkbox"> slice</label>
         <input id="slice-axis" type="text" value="z" size="4" spellcheck="false" title="slice plane normal">
         <input id="slice-frac" type="range" min="0" max="100" value="60" title="slice position">
@@ -178,6 +195,28 @@
         </span>
       </div>
       <img id="polefig" class="figure" alt="pole figures">
+    </div>
+    <div class="card wide">
+      <div class="card-head"><h2>Flat orientation map</h2>
+        <span class="row wrap">
+          <label class="inline">view
+            <input id="flat-view" type="text" value="z" size="4" spellcheck="false"></label>
+          <label class="inline">slab
+            <input id="flat-slab" type="number" min="1" step="1" value="10" size="4"></label>
+          <span class="muted">&#8491;</span>
+          <label class="inline">pixel
+            <input id="flat-pixel" type="number" min="0.1" step="0.1" value="0.5" size="4"></label>
+          <label class="inline">boundary
+            <input id="flat-angle" type="number" min="0" step="1" value="5" size="3"></label>
+          <span class="muted">&deg;</span>
+          <label class="inline" title="paint unindexed atoms black instead of filling">
+            <input id="flat-raw" type="checkbox"> raw</label>
+          <button id="flat-draw" class="small">draw</button>
+          <a id="download-flat" class="small button" download>PNG</a>
+        </span>
+      </div>
+      <img id="flatmap" class="figure" alt="flat orientation map">
+      <p id="flat-info" class="muted note"></p>
     </div>
   </section>
 </main>
