@@ -138,6 +138,32 @@ def render_ipf(
         pipeline.remove_from_scene()
 
 
+def _tripod_overlay(frame, labels=("rd", "td", "nd"), size: float = 0.11):
+    """A coordinate tripod showing the sample axes, e.g. RD, TD and ND.
+
+    Without it a rendered map does not say which way the reference direction
+    points, which is the one thing a reader needs to interpret the colours.
+    """
+    from ovito.vis import CoordinateTripodOverlay
+
+    tripod = CoordinateTripodOverlay()
+    tripod.style = CoordinateTripodOverlay.Style.Solid
+    tripod.size = float(size)
+    tripod.line_width = 0.06
+    tripod.font_size = 0.42
+    # Enough inset that the axis labels are not clipped by the image edge.
+    tripod.offset_x = 0.07
+    tripod.offset_y = 0.05
+    tripod.axis4_enabled = False
+    colors = ((0.85, 0.20, 0.20), (0.20, 0.60, 0.25), (0.20, 0.35, 0.85))
+    for index, (name, color) in enumerate(zip(labels, colors), start=1):
+        setattr(tripod, f"axis{index}_enabled", True)
+        setattr(tripod, f"axis{index}_label", frame.label(name))
+        setattr(tripod, f"axis{index}_dir", tuple(float(c) for c in frame.direction(name)))
+        setattr(tripod, f"axis{index}_color", color)
+    return tripod
+
+
 def _make_renderer(name: str):
     from ovito import vis
 
@@ -162,6 +188,8 @@ def render_result(
     transparent: bool = False,
     renderer: str = "auto",
     show_cell: bool = True,
+    tripod: bool = False,
+    tripod_axes=("rd", "td", "nd"),
 ):
     """Render an :class:`~ptmipf.analysis.IPFResult` that has already been computed.
 
@@ -222,6 +250,8 @@ def render_result(
             camera_dir=tuple(float(c) for c in camera_dir),
         )
         viewport.zoom_all(size=size)
+        if tripod:
+            viewport.overlays.append(_tripod_overlay(result.frame, tripod_axes))
         for name in (["tachyon", "opengl"] if renderer == "auto" else [renderer]):
             try:
                 engine = _make_renderer(name)

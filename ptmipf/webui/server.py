@@ -10,8 +10,8 @@ Design notes
 * ``http.server`` keeps the package free of web-framework dependencies; the
   API is small enough that a framework would only add weight.
 * PTM runs once per (file, structures, cutoff, frame) combination and the
-  result is cached; everything else — projection direction, sample frame,
-  selections, orbiting the 3D view — reuses the cache and responds in well
+  result is cached; everything else (projection direction, sample frame,
+  selections, orbiting the 3D view) reuses the cache and responds in well
   under a second even for millions of atoms.
 * Every plot in the UI is produced by the same functions the CLI uses, and
   the UI can emit the equivalent ``ptmipf`` command line, so an interactive

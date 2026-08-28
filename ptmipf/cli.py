@@ -36,6 +36,10 @@ examples:
   ptmipf mg.dump --structures hcp --direction z \\
       --slice z --slice-width 10 --view z --render section.png --hide-other
 
+  # A flat EBSD-style orientation map of a section, boundaries filled in
+  ptmipf mg.dump --structures hcp --direction nd --fill-boundaries 6 \\
+      --view nd --slice-width 10 --flat-map map.png
+
   # One grain, picked from an atom in it, in the top half of the cell
   ptmipf mg.dump --structures hcp --from-selection --select-grain 12345 \\
       --select-region 'z|60|' --ipf-density grain.png
@@ -108,6 +112,57 @@ def build_parser() -> argparse.ArgumentParser:
     )
     group.add_argument(
         "--frame", type=int, default=0, help="trajectory frame to analyse (default: 0)"
+    )
+
+    group = parser.add_argument_group("boundary filling")
+    group.add_argument(
+        "--fill-boundaries",
+        nargs="?",
+        type=float,
+        const=6.0,
+        metavar="RADIUS",
+        help="give atoms PTM left unindexed the average orientation of the "
+        "indexed atoms within RADIUS angstrom (default 6.0), so grain "
+        "boundaries are coloured instead of blank",
+    )
+    group.add_argument(
+        "--fill-min-neighbours",
+        type=int,
+        default=3,
+        metavar="N",
+        help="leave an atom unindexed if it has fewer than N indexed neighbours "
+        "(default: %(default)s)",
+    )
+
+    group = parser.add_argument_group(
+        "flat orientation map",
+        "A section rasterised into a flat EBSD-style map: colours and grain "
+        "boundaries, no atoms.",
+    )
+    group.add_argument("--flat-map", metavar="PNG", help="write a flat orientation map here")
+    group.add_argument(
+        "--pixel-size",
+        type=float,
+        default=0.5,
+        metavar="ANGSTROM",
+        help="pixel size of the flat map (default: %(default)s)",
+    )
+    group.add_argument(
+        "--boundary-angle",
+        type=float,
+        default=5.0,
+        metavar="DEG",
+        help="misorientation above which neighbouring pixels are a grain "
+        "boundary; 0 draws none (default: %(default)s)",
+    )
+    group.add_argument(
+        "--flat-map-raw",
+        action="store_true",
+        help="paint unindexed atoms black instead of filling the map from the "
+        "indexed ones, showing how wide the boundaries really are",
+    )
+    group.add_argument(
+        "--no-scale-bar", action="store_true", help="omit the scale bar on the flat map"
     )
 
     group = parser.add_argument_group(
@@ -252,6 +307,11 @@ def build_parser() -> argparse.ArgumentParser:
     group.add_argument(
         "--transparent", action="store_true", help="render on a transparent background"
     )
+    group.add_argument(
+        "--tripod",
+        action="store_true",
+        help="draw a coordinate tripod labelled with the sample axes (RD, TD, ND)",
+    )
     parser.add_argument("-q", "--quiet", action="store_true", help="suppress the summary")
     return parser
 
@@ -385,6 +445,22 @@ def main(argv=None) -> int:
         only=only,
     )
 
+    if args.fill_boundaries is not None:
+        from .fill import fill_boundary_orientations
+
+        result = fill_boundary_orientations(
+            result,
+            radius=args.fill_boundaries,
+            min_neighbours=args.fill_min_neighbours,
+            structure=args.orientation_structure,
+        )
+        if not args.quiet:
+            filled = int(result.interpolated.sum())
+            print(
+                f"filled {filled} unindexed atoms from neighbours within "
+                f"{args.fill_boundaries:g} A"
+            )
+
     if not args.quiet:
         print(result.summary())
 
@@ -484,6 +560,33 @@ def main(argv=None) -> int:
             if not args.quiet:
                 print(f"wrote {args.ipf_density}")
 
+    if args.flat_map:
+        from .flatmap import flat_ipf_map, save_flat_map
+
+        view = args.view or args.slice_normal or "z"
+        flat = flat_ipf_map(
+            result,
+            view=view,
+            slab_width=args.slice_width or 10.0,
+            slab_center=args.slice_distance,
+            pixel_size=args.pixel_size,
+            boundary_angle=args.boundary_angle,
+            structure=args.orientation_structure,
+            fill_unindexed=not args.flat_map_raw,
+        )
+        save_flat_map(
+            flat,
+            args.flat_map,
+            scale_bar=not args.no_scale_bar,
+            title=f"IPF {result.direction_label}",
+            dpi=args.dpi,
+        )
+        if not args.quiet:
+            print(
+                f"wrote {args.flat_map} ({flat.shape[1]} x {flat.shape[0]} px, "
+                f"{flat.slab_width:g} A section along {flat.view_label})"
+            )
+
     if args.render:
         from .render import render_result
 
@@ -511,6 +614,7 @@ def main(argv=None) -> int:
             camera_dir=camera_dir,
             perspective=perspective,
             transparent=args.transparent,
+            tripod=args.tripod,
         )
         if not args.quiet:
             print(f"wrote {args.render}")

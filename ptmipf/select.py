@@ -19,6 +19,7 @@ from .symmetry import LaueGroup, get_laue_group
 
 __all__ = [
     "combine",
+    "pairwise_misorientation_angles",
     "invert",
     "misorientation_angles",
     "select_by_ipf_direction",
@@ -271,3 +272,26 @@ def combine(*masks: np.ndarray, mode: str = "and") -> np.ndarray:
 def invert(mask: np.ndarray) -> np.ndarray:
     """Invert a selection."""
     return ~np.asarray(mask, dtype=bool)
+
+
+def pairwise_misorientation_angles(
+    rotations_a: np.ndarray, rotations_b: np.ndarray, laue, degrees: bool = True
+) -> np.ndarray:
+    """Disorientation angle between two equally long lists of orientations.
+
+    Element *i* is the misorientation between ``rotations_a[i]`` and
+    ``rotations_b[i]``, reduced by the symmetry of *laue*.  This is what a grain
+    boundary map needs: the misorientation between neighbouring points.
+    """
+    if not isinstance(laue, LaueGroup):
+        laue = get_laue_group(laue)
+    a = np.asarray(rotations_a, dtype=float)
+    b = np.asarray(rotations_b, dtype=float)
+    if a.shape != b.shape:
+        raise ValueError(f"shapes {a.shape} and {b.shape} do not match")
+
+    misorientation = np.einsum("nji,njk->nik", a, b)
+    traces = np.einsum("nab,kba->nk", misorientation, laue.operators)
+    cosine = np.clip((traces.max(axis=1) - 1.0) / 2.0, -1.0, 1.0)
+    angle = np.arccos(cosine)
+    return np.degrees(angle) if degrees else angle

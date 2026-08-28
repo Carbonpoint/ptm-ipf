@@ -133,10 +133,14 @@ def ipf_legend(
 
     vx, vy = stereographic(laue.sector_vertices)
     center = np.array([vx.mean(), vy.mean()])
+    # Push the labels clear of the sector: they sit outside the coloured area
+    # with a visible gap, never touching the boundary.
+    span = max(vx.max() - vx.min(), vy.max() - vy.min())
+    gap = 0.16 * span
     for x, y, label in zip(vx, vy, laue.vertex_labels):
         offset = np.array([x, y]) - center
         norm = np.linalg.norm(offset)
-        offset = offset / norm * 0.06 if norm > 1e-9 else np.array([0.0, 0.06])
+        offset = offset / norm * gap if norm > 1e-9 else np.array([0.0, gap])
         ax.text(
             x + offset[0],
             y + offset[1],
@@ -155,7 +159,8 @@ def ipf_legend(
 
     ax.set_aspect("equal")
     ax.axis("off")
-    ax.margins(0.12)
+    # Room for the labels that now sit outside the sector.
+    ax.margins(0.26)
     fig.tight_layout()
 
     if filename is not None:

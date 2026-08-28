@@ -81,6 +81,9 @@ class IPFResult:
     type_codes: dict[str, int]
     cell: np.ndarray | None = None
     frame_index: int = 0
+    #: True for atoms whose orientation was interpolated rather than measured
+    #: by PTM; see :func:`ptmipf.fill.fill_boundary_orientations`.
+    interpolated: np.ndarray | None = None
     counts: dict[str, int] = field(default_factory=dict)
 
     @property
@@ -129,6 +132,7 @@ class IPFResult:
             rmsd=self.rmsd[mask],
             particle_types=self.particle_types[mask],
             counts=counts,
+            interpolated=None if self.interpolated is None else self.interpolated[mask],
         )
 
     def recolor(self, direction, frame: SampleFrame | None = None, only=None) -> IPFResult:

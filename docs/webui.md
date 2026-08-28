@@ -1,8 +1,8 @@
 # Web interface
 
-`ptm-ipf` ships a local web interface that wraps the whole toolchain — PTM
+`ptm-ipf` ships a local web interface that wraps the whole toolchain (PTM
 structure identification, IPF colouring, the colour key, pole figures, the IPF
-density plot, atom selections and file export — behind an interactive page:
+density plot, atom selections and file export) behind an interactive page:
 
 ```bash
 ptmipf-ui mg.dump                    # analyse a file and open the browser
@@ -35,7 +35,7 @@ header):
 * **3D view**: the IPF-coloured atoms, rendered server-side by OVITO from the
   cached result. Drag to orbit, scroll to zoom, cut the cell open with the
   slice control, and hide the unidentified grain-boundary atoms. Click an
-  atom to see its position, structure, RMSD and orientation — and to use it
+  atom to see its position, structure, RMSD and orientation, and to use it
   as a misorientation reference.
 * **Sections**: the slice control cuts the cell open; giving it a thickness keeps a slab
   of that many angstroms instead, and the X/Y/Z buttons look straight down an axis, which
@@ -53,7 +53,7 @@ header):
   highlighted (or shown alone) in the 3D view, the pole figures and IPF
   density can be restricted to it, and it exports to its own `.xyz`/`.dump`.
 * **Reproducibility**: the *CLI command* button prints the `ptmipf` command
-  line — selection flags included — that reproduces the current session, so
+  line, selection flags included, that reproduces the current session, so
   interactive exploration turns directly into a scriptable analysis.
 
 ## Design notes

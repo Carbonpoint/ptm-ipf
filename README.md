@@ -5,7 +5,7 @@
 `ptm-ipf` runs [OVITO](https://www.ovito.org)'s polyhedral template matching (PTM) on an
 atomistic configuration, turns the per-atom orientation quaternions into inverse pole
 figure (IPF) colours using the standard EDAX/TSL colour key, and draws the matching
-colour key, pole figures and orientation densities — so a molecular dynamics
+colour key, pole figures and orientation densities, so a molecular dynamics
 microstructure can be put side by side with an EBSD orientation map and read the same way.
 
 <p align="center">
@@ -14,8 +14,8 @@ microstructure can be put side by side with an EBSD orientation map and read the
 </p>
 
 <p align="center"><em>A textured hcp magnesium polycrystal, cut open and coloured by
-IPF-ND, with its colour key. Reds mean c axes near ND — the basal texture of rolled or
-extruded magnesium.</em></p>
+IPF-ND, with the sample triad and its colour key. Reds mean c axes near ND: the basal
+texture of rolled or extruded magnesium.</em></p>
 
 ## Why
 
@@ -78,10 +78,53 @@ ptmipf mg.dump --structures hcp --direction z --hide-other \
 
 `--slice-width` is the slab thickness in angstroms (0, the default, cuts the cell in half
 instead), `--slice-distance` moves the plane along its normal, and `--view` puts the camera
-on an axis looking down it, orthographically — so grains appear as flat coloured regions
+on an axis looking down it, orthographically, so grains appear as flat coloured regions
 with the grain boundaries between them. `--view` accepts an axis, a named sample axis or a
-vector, and `--perspective` restores the perspective camera. The web interface has the same
+vector, `--perspective` restores the perspective camera, and `--tripod` draws a coordinate
+triad labelled with the sample axes. The web interface has the same
 controls: a thickness box beside the slice slider, and X/Y/Z buttons for the axial views.
+
+### Flat orientation maps
+
+A section can also be rasterised into a flat map: colours and grain boundaries, no atoms,
+which is what an EBSD orientation map looks like.
+
+```bash
+ptmipf mg.dump --structures hcp --direction nd --fill-boundaries 6 \
+    --view nd --slice-width 10 --flat-map map.png
+```
+
+<p align="center">
+  <img src="docs/mg_flat_map.png" width="52%" alt="flat EBSD-style orientation map">
+</p>
+
+The pixels are coloured by the orientation of the nearest atom, the pixels are then grouped
+into grains, and the line between two grains is drawn as the boundary. Segmenting first is
+what gives clean boundary lines rather than a scribble wherever the orientation drifts.
+`--pixel-size` sets the resolution (0.5 A by default), `--boundary-angle` the misorientation
+that counts as a boundary (5 degrees), and `--flat-map-raw` paints the unindexed atoms black
+instead of filling the map from the indexed ones, which shows how wide the boundaries
+really are.
+
+### Filling the grain boundaries
+
+PTM gives no orientation to disordered atoms, so grain boundaries appear as gaps. They can
+be filled by averaging the orientations of the indexed atoms within a radius, in the way
+EBSD software extrapolates unindexed points:
+
+```bash
+ptmipf mg.dump --structures hcp --direction nd --fill-boundaries 6 -o filled.xyz
+```
+
+`--fill-boundaries` takes the radius in angstrom (6 by default, about two atomic shells),
+and `--fill-min-neighbours` refuses to fill atoms with too few indexed neighbours, which
+keeps free surfaces and voids from being filled with noise. The averaging is symmetry
+aware: orientations are moved to the symmetry equivalent nearest their reference before
+being averaged, since the naive mean of two symmetry equivalents is meaningless.
+
+Filled atoms are flagged in `IPFResult.interpolated`, because this is an interpolation and
+not a measurement: an atom in the middle of a high angle boundary has neighbours in two
+grains and its average orientation lies in neither.
 
 ### Choosing the reference direction
 
@@ -130,7 +173,7 @@ pass `--c-over-a` for your material (1.6236 for magnesium; the ideal 1.633 is th
 ### Selecting atoms
 
 Any part of a configuration can be isolated and then coloured, plotted, rendered or
-exported on its own — one grain, one phase, one orientation fibre, one region of the cell,
+exported on its own: one grain, one phase, one orientation fibre, one region of the cell,
 or the well-fitted atoms only. Criteria combine with `--select-mode and|or` and can be
 inverted; the fields of the composite options are separated by `|`, so a direction may
 still contain commas.
@@ -145,8 +188,8 @@ ptmipf mg.dump --structures hcp --from-selection     --select-grain 12345 --sele
 
 | option | selects |
 |---|---|
-| `--select-orientation 'CRYSTAL\|SAMPLE\|TOL'` | atoms whose crystal direction (`0001`, `10-10`, `111`) lies within `TOL` degrees of a sample direction — an orientation fibre |
-| `--select-grain INDEX` | atoms whose **whole** orientation matches that of atom `INDEX`, within `--select-grain-tolerance` — one grain |
+| `--select-orientation 'CRYSTAL\|SAMPLE\|TOL'` | atoms whose crystal direction (`0001`, `10-10`, `111`) lies within `TOL` degrees of a sample direction (an orientation fibre) |
+| `--select-grain INDEX` | atoms whose **whole** orientation matches that of atom `INDEX`, within `--select-grain-tolerance` (one grain) |
 | `--select-structure`, `--select-type` | a phase, or a chemical species |
 | `--select-region 'AXIS\|MIN\|MAX'` | a slab along a cell axis, a named sample axis or a vector |
 | `--select-rmsd-below F` | the well-fitted atoms, dropping the distorted first shell at a boundary |
@@ -208,6 +251,16 @@ pole_figure(grains.rotations("hcp"), "0001", "6/mmm", filename="basal_pf.png")
 render_result(grains, "basal.png", hide_other=True)
 ```
 
+```python
+from ptmipf.fill import fill_boundary_orientations
+from ptmipf.flatmap import flat_ipf_map, save_flat_map
+
+filled = fill_boundary_orientations(result, radius=6.0)
+flat = flat_ipf_map(filled, view="nd", slab_width=10.0, pixel_size=0.4)
+print(f"{flat.n_grains} grains in the section")
+save_flat_map(flat, "map.png")
+```
+
 `result.recolor("rd")` returns a copy projected along another direction without re-running
 PTM, which is what makes an interactive front end responsive.
 `ptmipf.select.misorientation_angles` gives the symmetry-reduced disorientation in degrees
@@ -240,7 +293,7 @@ pipeline.modifiers.append(ipf_color_modifier(direction="z", structures=("hcp",))
 ## Web interface
 
 Everything above is also available as a local web interface, which adds no
-dependencies — the server is standard library only:
+dependencies, because the server is standard library only:
 
 ```bash
 ptmipf-ui mg.dump                 # analyse and open the browser

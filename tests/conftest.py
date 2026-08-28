@@ -47,3 +47,48 @@ def write_crystal(tmp_path):
         return str(path)
 
     return _write
+
+
+@pytest.fixture
+def write_bicrystal(tmp_path):
+    """Two hcp grains meeting on a plane, for grain and boundary tests."""
+    ase_build = pytest.importorskip("ase.build")
+    ase_io = pytest.importorskip("ase.io")
+
+    def _write(misorientation_deg=40.0, repeat=10, name="bicrystal.xyz"):
+        from ase import Atoms
+
+        # Build a block big enough that a rotated copy still covers the box.
+        block = ase_build.bulk("Mg", "hcp", a=3.2094, c=5.2108).repeat(
+            (2 * repeat, 2 * repeat, repeat)
+        )
+        positions = block.positions - block.positions.mean(axis=0)
+        side = 0.45 * float(np.ptp(positions[:, 0]))
+        height = 0.45 * float(np.ptp(positions[:, 2]))
+
+        turn = rotation_matrix([0.0, 0.0, 1.0], misorientation_deg)
+        rotated = positions @ turn.T
+
+        def clip(points, x_low, x_high):
+            keep = (
+                (points[:, 0] >= x_low)
+                & (points[:, 0] < x_high)
+                & (np.abs(points[:, 1]) < side)
+                & (np.abs(points[:, 2]) < height)
+            )
+            return points[keep]
+
+        grain_a = clip(positions, -side, 0.0)
+        grain_b = clip(rotated, 0.0, side)
+        merged = np.vstack([grain_a, grain_b])
+        merged -= merged.min(axis=0)
+
+        span = merged.max(axis=0) + 2.0
+        atoms = Atoms(
+            "Mg" + str(len(merged)), positions=merged, cell=np.diag(span), pbc=False
+        )
+        path = tmp_path / name
+        ase_io.write(str(path), atoms, format="extxyz")
+        return str(path)
+
+    return _write
