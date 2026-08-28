@@ -1,0 +1,46 @@
+cff-version: 1.2.0
+title: "ptm-ipf: EBSD-style inverse pole figure colouring for atomistic simulations"
+message: "If you use this software, please cite it, along with the methods it builds on."
+type: software
+license: GPL-3.0-or-later
+version: 0.1.0
+repository-code: "https://github.com/Carbonpoint/ptm-ipf"
+keywords:
+  - molecular dynamics
+  - crystallography
+  - inverse pole figure
+  - polyhedral template matching
+references:
+  - type: article
+    title: "Robust structural identification via polyhedral template matching"
+    authors:
+      - family-names: Larsen
+        given-names: Peter Mahler
+      - family-names: Schmidt
+        given-names: Søren
+      - family-names: Schiøtz
+        given-names: Jakob
+    journal: "Modelling and Simulation in Materials Science and Engineering"
+    volume: 24
+    year: 2016
+    doi: 10.1088/0965-0393/24/5/055007
+  - type: article
+    title: "Orientations - perfectly colored"
+    authors:
+      - family-names: Nolze
+        given-names: Gert
+      - family-names: Hielscher
+        given-names: Ralf
+    journal: "Journal of Applied Crystallography"
+    volume: 49
+    year: 2016
+    doi: 10.1107/S1600576716012942
+  - type: article
+    title: "Visualization and analysis of atomistic simulation data with OVITO - the Open Visualization Tool"
+    authors:
+      - family-names: Stukowski
+        given-names: Alexander
+    journal: "Modelling and Simulation in Materials Science and Engineering"
+    volume: 18
+    year: 2010
+    doi: 10.1088/0965-0393/18/1/015012
