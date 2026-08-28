@@ -188,14 +188,20 @@ def _density_grid(x, y, resolution: int, sigma_bins: float):
     return centers, mrd
 
 
-def _draw_frame(ax, up_label: str, right_label: str, center_label: str) -> None:
+def _draw_frame(ax, up_label: str, right_label: str) -> None:
     theta = np.linspace(0, 2 * np.pi, 361)
     ax.plot(np.cos(theta), np.sin(theta), color="black", lw=1.0, zorder=5)
-    ax.plot([0], [0], marker="+", color="black", ms=6, zorder=5)
+    # The centre of the projection is the out-of-page axis, drawn with the usual
+    # circle-and-dot symbol rather than named: it is implied by the two in-plane
+    # axes and needs no label.
+    ax.plot(
+        [0], [0], marker="o", markerfacecolor="none", markeredgecolor="black",
+        ms=7, markeredgewidth=0.9, linestyle="none", zorder=5,
+    )
+    ax.plot([0], [0], marker=".", color="black", ms=2.5, linestyle="none", zorder=5)
     pad = 1.06
     ax.text(0, pad, up_label, ha="center", va="bottom", fontsize=10)
     ax.text(pad, 0, right_label, ha="left", va="center", fontsize=10)
-    ax.text(-pad, -pad, center_label, ha="left", va="top", fontsize=9, color="0.35")
     ax.set_xlim(-1.25, 1.25)
     ax.set_ylim(-1.25, 1.25)
     ax.set_aspect("equal")
@@ -282,7 +288,7 @@ def pole_figure(
             bar = fig.colorbar(contour, ax=ax, fraction=0.046, pad=0.08)
             bar.set_label("MRD", fontsize=9)
 
-        _draw_frame(ax, frame.label(up), frame.label(right), f"{frame.label(center)} out of page")
+        _draw_frame(ax, frame.label(up), frame.label(right))
         ax.set_title(_format_indices(str(pole), "{}" if plane else "<>"), fontsize=11)
 
     fig.tight_layout()
