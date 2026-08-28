@@ -69,6 +69,7 @@ def visible_mask(
     hide_other: bool = False,
     slice_normal=None,
     slice_distance: float | None = None,
+    slice_width: float = 0.0,
     selection: np.ndarray | None = None,
     selection_mode: str = "highlight",
 ) -> np.ndarray:
@@ -78,9 +79,15 @@ def visible_mask(
         visible &= result.structure_types != 0
     if slice_normal is not None:
         normal = np.asarray(slice_normal, dtype=float)
+        projected = result.positions @ normal
         if slice_distance is None:
             slice_distance = float(result.positions.mean(axis=0) @ normal)
-        visible &= result.positions @ normal <= slice_distance
+        if slice_width > 0:
+            # A slab of the given thickness centred on the plane, which is the
+            # atomistic equivalent of an EBSD section.
+            visible &= np.abs(projected - slice_distance) <= slice_width / 2.0
+        else:
+            visible &= projected <= slice_distance
     if selection is not None and selection_mode == "only":
         visible &= selection
     return visible
@@ -96,6 +103,7 @@ def render_scene(
     hide_other: bool = False,
     slice_normal=None,
     slice_distance: float | None = None,
+    slice_width: float = 0.0,
     selection: np.ndarray | None = None,
     selection_mode: str = "highlight",
     transparent: bool = False,
@@ -110,7 +118,13 @@ def render_scene(
     from ovito.vis import Viewport
 
     visible = visible_mask(
-        result, hide_other, slice_normal, slice_distance, selection, selection_mode
+        result,
+        hide_other=hide_other,
+        slice_normal=slice_normal,
+        slice_distance=slice_distance,
+        slice_width=slice_width,
+        selection=selection,
+        selection_mode=selection_mode,
     )
     positions = result.positions[visible]
     colors = result.colors[visible].copy()

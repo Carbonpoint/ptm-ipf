@@ -130,6 +130,14 @@
         <label class="inline"><input id="slice-on" type="checkbox"> slice</label>
         <input id="slice-axis" type="text" value="z" size="4" spellcheck="false" title="slice plane normal">
         <input id="slice-frac" type="range" min="0" max="100" value="60" title="slice position">
+        <input id="slice-width" type="number" min="0" step="1" value="0" size="4"
+               title="slab thickness in angstroms; 0 cuts the cell in half">
+        <span class="muted small-unit">&#8491;</span>
+        <span class="row" title="View along an axis, orthographically">
+          <button id="view-x" class="small">X</button>
+          <button id="view-y" class="small">Y</button>
+          <button id="view-z" class="small">Z</button>
+        </span>
         <button id="reset-view" class="small" title="Reset the camera">reset</button>
         <a id="download-view" class="small button" title="Download this view as PNG" download>PNG</a>
       </span>

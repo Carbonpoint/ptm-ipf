@@ -28,12 +28,16 @@ examples:
   ptmipf alloy.dump -o out.xyz --structures hcp,fcc --color-only hcp
 
   # Only the basal-oriented grains: select them, then plot and render the subset
-  ptmipf mg.dump --structures hcp --direction nd --from-selection \
-      --select-orientation '0001|nd|15' --selection-output basal.xyz \
+  ptmipf mg.dump --structures hcp --direction nd --from-selection \\
+      --select-orientation '0001|nd|15' --selection-output basal.xyz \\
       --pole-figure 0001 --render basal.png --hide-other
 
+  # A 10 angstrom section through the middle, seen face on like an EBSD map
+  ptmipf mg.dump --structures hcp --direction z \\
+      --slice z --slice-width 10 --view z --render section.png --hide-other
+
   # One grain, picked from an atom in it, in the top half of the cell
-  ptmipf mg.dump --structures hcp --from-selection --select-grain 12345 \
+  ptmipf mg.dump --structures hcp --from-selection --select-grain 12345 \\
       --select-region 'z|60|' --ipf-density grain.png
 """
 
@@ -224,6 +228,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     group.add_argument(
         "--slice-distance", type=float, help="offset of the slice plane along its normal"
+    )
+    group.add_argument(
+        "--slice-width",
+        type=float,
+        default=0.0,
+        metavar="ANGSTROM",
+        help="keep a slab of this thickness centred on the slice plane instead of "
+        "cutting the cell in half; 0 cuts in half (default: %(default)s)",
+    )
+    group.add_argument(
+        "--view",
+        metavar="AXIS",
+        help="view along this direction (axis, named sample axis or vector), "
+        "orthographically.  '--slice z --slice-width 10 --view z' gives a 10 A "
+        "section seen face on, like an EBSD map",
+    )
+    group.add_argument(
+        "--perspective",
+        action="store_true",
+        help="use a perspective camera with --view instead of an orthographic one",
     )
     group.add_argument(
         "--transparent", action="store_true", help="render on a transparent background"
@@ -469,13 +493,23 @@ def main(argv=None) -> int:
             raise SystemExit(
                 f"--render-size must look like 800x600, got {args.render_size!r}"
             ) from None
+        camera_dir = (-1.0, -1.0, -0.5)
+        perspective = True
+        if args.view:
+            # The camera looks along the given direction, so it sits on the far
+            # side of the cell from it.
+            camera_dir = tuple(-c for c in frame.direction(args.view))
+            perspective = args.perspective
         render_result(
             result,
             args.render,
             hide_other=args.hide_other,
             slice_normal=args.slice_normal,
             slice_distance=args.slice_distance,
+            slice_width=args.slice_width,
             size=(width, height),
+            camera_dir=camera_dir,
+            perspective=perspective,
             transparent=args.transparent,
         )
         if not args.quiet:

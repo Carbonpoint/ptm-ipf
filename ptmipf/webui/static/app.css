@@ -250,3 +250,13 @@ dialog h2 { margin-top: 0; font-size: 1rem; }
   word-break: break-all;
   font-size: 0.82rem;
 }
+
+/* Unit suffix beside the slab thickness input. */
+.small-unit {
+  font-size: 0.85em;
+  margin-left: -0.2rem;
+}
+
+#slice-width {
+  width: 4.2rem;
+}

@@ -210,6 +210,7 @@ function viewQuery(extra) {
   if ($("slice-on").checked && $("slice-axis").value.trim()) {
     params.set("slice_axis", $("slice-axis").value.trim());
     params.set("slice_frac", ($("slice-frac").value / 100).toFixed(3));
+    params.set("slice_width", $("slice-width").value || 0);
   }
   for (const [key, value] of Object.entries(extra || {})) params.set(key, value);
   return params;
@@ -288,6 +289,7 @@ async function pickAtom(event) {
   if ($("slice-on").checked && $("slice-axis").value.trim()) {
     body.slice_axis = $("slice-axis").value.trim();
     body.slice_frac = $("slice-frac").value / 100;
+    body.slice_width = Number($("slice-width").value) || 0;
   }
   try {
     const outcome = await postJSON("/api/pick", body);
@@ -668,6 +670,16 @@ async function init() {
   $("slice-on").addEventListener("change", debouncedView);
   $("slice-axis").addEventListener("change", debouncedView);
   $("slice-frac").addEventListener("input", debouncedView);
+  $("slice-width").addEventListener("input", debouncedView);
+  // Look straight down an axis, which turns a slab into an EBSD-style section.
+  const axisViews = { "view-x": [0, 0], "view-y": [90, 0], "view-z": [-90, 89.9] };
+  for (const [id, [az, el]] of Object.entries(axisViews)) {
+    $(id).addEventListener("click", () => {
+      state.camera.az = az;
+      state.camera.el = el;
+      refreshView();
+    });
+  }
   $("highlight-mode").addEventListener("change", debouncedView);
 
   for (const id of ["poles", "c-over-a", "pole-mode", "pole-structure"]) {

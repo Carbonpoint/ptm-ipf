@@ -37,6 +37,9 @@ header):
   slice control, and hide the unidentified grain-boundary atoms. Click an
   atom to see its position, structure, RMSD and orientation — and to use it
   as a misorientation reference.
+* **Sections**: the slice control cuts the cell open; giving it a thickness keeps a slab
+  of that many angstroms instead, and the X/Y/Z buttons look straight down an axis, which
+  turns the slab into an EBSD-style orientation map of a section.
 * **Figures**: the IPF colour key, pole figures for any pole families
   (`0001,10-10,11-20`, with a c/a input for non-ideal lattices, density or
   scatter mode) and the IPF orientation density, regenerated whenever the

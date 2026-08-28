@@ -257,6 +257,7 @@ class Handler(BaseHTTPRequestHandler):
             fraction = np.clip(_number(query, "slice_frac", 1.0), 0.0, 1.0)
             options["slice_normal"] = normal
             options["slice_distance"] = low + fraction * (high - low)
+            options["slice_width"] = max(0.0, _number(query, "slice_width", 0.0))
         mode = query.get("highlight", ["highlight"])[0]
         options["selection_mode"] = mode
         options["selection"] = _selection_active(state, mode)

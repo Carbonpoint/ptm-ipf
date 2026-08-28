@@ -65,6 +65,24 @@ ptmipf mg.dump --structures hcp --direction nd \
     --render mg_map.png --hide-other --slice nd --render-size 1600x1200
 ```
 
+### Sections
+
+A slab a few atomic layers thick, viewed down its normal, is the atomistic equivalent of an
+EBSD orientation map:
+
+```bash
+# A 10 A section through the middle of the cell, seen face on
+ptmipf mg.dump --structures hcp --direction z --hide-other \
+    --slice z --slice-width 10 --view z --render section.png
+```
+
+`--slice-width` is the slab thickness in angstroms (0, the default, cuts the cell in half
+instead), `--slice-distance` moves the plane along its normal, and `--view` puts the camera
+on an axis looking down it, orthographically — so grains appear as flat coloured regions
+with the grain boundaries between them. `--view` accepts an axis, a named sample axis or a
+vector, and `--perspective` restores the perspective camera. The web interface has the same
+controls: a thickness box beside the slice slider, and X/Y/Z buttons for the axial views.
+
 ### Choosing the reference direction
 
 The direction is whatever you would project an EBSD map along. Give it as an axis, a
