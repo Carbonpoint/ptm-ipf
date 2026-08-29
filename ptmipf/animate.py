@@ -61,6 +61,7 @@ def animate_flat_map(
     fps: int = 4,
     dpi: int = 120,
     workers: int = 1,
+    rmsd_cutoff: float = 0.1,
 ):
     """Render every frame as a flat map and join them into a video.
 
@@ -74,6 +75,9 @@ def animate_flat_map(
         Signed strain rate in 1/ps, used to label each frame with its strain.
     boundary_scale
         ``(vmin, vmax, cmap)`` to colour the boundaries by misorientation.
+    rmsd_cutoff
+        PTM RMSD cutoff.  The 0.1 default suits fcc at room temperature; bcc
+        metals need about 0.15 or their distorted grain interiors go unindexed.
     workers
         Frames are independent, so they can be rendered in parallel.  Keep
         this at 1 in a process that has already used OVITO: its thread pool
@@ -95,7 +99,7 @@ def animate_flat_map(
         direction=direction, view=view, structures=tuple(structures), frame=frame,
         slab_width=slab_width, pixel_size=pixel_size, fill=fill,
         boundary_angle=boundary_angle, boundary_scale=boundary_scale,
-        wireframes=wireframes, title=title, dpi=dpi,
+        wireframes=wireframes, title=title, dpi=dpi, rmsd_cutoff=rmsd_cutoff,
     )
     if workers > 1:
         import multiprocessing
@@ -127,7 +131,7 @@ def _flat_frame(job, settings):
     path, png, strain = job
     result = analyse(
         path, direction=settings["direction"], structures=settings["structures"],
-        frame=settings["frame"],
+        frame=settings["frame"], rmsd_cutoff=settings.get("rmsd_cutoff", 0.1),
     )
     axis = "xyz".index(settings["view"]) if settings["view"] in "xyz" else 2
     centre = float(np.median(result.positions[:, axis]))
@@ -178,6 +182,7 @@ def animate_render(
     size=(900, 800),
     rate: float | None = None,
     fps: int = 4,
+    rmsd_cutoff: float = 0.1,
 ):
     """Render every frame with OVITO, as a section or the whole cell, to a video."""
     from .analysis import analyse
@@ -190,7 +195,10 @@ def animate_render(
     pngs = []
     camera = {"x": (-1.0, 0, 0), "y": (0, -1.0, 0), "z": (0, 0, -1.0)}.get(view, (-1, -1, -0.5))
     for i, path in enumerate(files):
-        result = analyse(path, direction=direction, structures=structures, frame=frame)
+        result = analyse(
+            path, direction=direction, structures=structures, frame=frame,
+            rmsd_cutoff=rmsd_cutoff,
+        )
         if slab_width:
             axis = "xyz".index(view) if view in "xyz" else 2
             centre = float(np.median(result.positions[:, axis]))

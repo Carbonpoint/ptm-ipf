@@ -518,6 +518,7 @@ def _animate(args) -> int:
             files, args.animate, direction=args.direction, view=view, structures=structures,
             frame=frame, slab_width=slab, hide_other=args.hide_other, fill=fill,
             tripod=args.tripod, rate=args.strain_rate, fps=args.fps,
+            rmsd_cutoff=args.rmsd_cutoff,
         )
     else:
         scale = None
@@ -529,7 +530,7 @@ def _animate(args) -> int:
             frame=frame, slab_width=slab, pixel_size=args.pixel_size, fill=fill,
             boundary_angle=args.boundary_angle, boundary_scale=scale,
             wireframes=args.wireframes, rate=args.strain_rate, fps=args.fps,
-            workers=args.workers,
+            workers=args.workers, rmsd_cutoff=args.rmsd_cutoff,
         )
     if not args.quiet:
         print(f"wrote {args.animate} ({len(pngs)} frames)")
