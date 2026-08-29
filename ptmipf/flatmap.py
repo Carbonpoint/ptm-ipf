@@ -45,6 +45,10 @@ class FlatMap:
     orientation_index: np.ndarray | None = None
     rotations: np.ndarray | None = None
     laue: str | None = None
+    #: Which pixels are grain boundary, and the misorientation across each in
+    #: degrees (NaN off the boundary), so boundaries can be coloured by angle.
+    boundary: np.ndarray | None = None
+    boundary_angle_map: np.ndarray | None = None
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -240,6 +244,7 @@ def flat_ipf_map(
     n_grains = 0
     kept_rotations = None
     kept_laue = None
+    angle_map = None
 
     if boundary_angle and boundary_angle > 0:
         from .analysis import quaternions_to_matrices
@@ -256,6 +261,8 @@ def flat_ipf_map(
             )
             labels = _merge_small_grains(labels, picture, inside_2d, min_grain_pixels)
             n_grains = int(len(np.unique(labels[labels >= 0])))
+            angle_map = np.full((rows, columns), np.nan)
+            grain_rotation = _grain_mean_rotations(labels, index_2d, rotations, laue)
             for shift, axis in ((-1, 0), (-1, 1)):
                 neighbour = np.roll(labels, shift, axis=axis)
                 differs = (labels >= 0) & (neighbour >= 0) & (labels != neighbour)
@@ -264,6 +271,17 @@ def flat_ipf_map(
                 else:
                     differs[:, -1] = False
                 boundary |= differs
+                # Misorientation between the two grains meeting at this pixel,
+                # from their mean orientations, so a boundary has one angle
+                # along its length rather than pixel-to-pixel noise.
+                if differs.any():
+                    a = grain_rotation[labels[differs]]
+                    b = grain_rotation[neighbour[differs]]
+                    angles = pairwise_misorientation_angles(a, b, laue)
+                    current = angle_map[differs]
+                    angle_map[differs] = np.where(
+                        np.isnan(current), angles, np.fmax(current, angles)
+                    )
         else:
             boundary = _boundary_mask(
                 result, index_2d, inside_2d, structure_types, orientations,
@@ -289,6 +307,8 @@ def flat_ipf_map(
         orientation_index=index_2d if labels is not None else None,
         rotations=kept_rotations if labels is not None else None,
         laue=kept_laue if labels is not None else None,
+        boundary=boundary,
+        boundary_angle_map=angle_map,
     )
 
 
@@ -392,6 +412,24 @@ def _union_find_labels(shape, connected_pairs) -> np.ndarray:
     return labels.reshape(shape)
 
 
+def _grain_mean_rotations(labels, index, rotations, laue, sample=300):
+    """Symmetry-aware mean orientation of every grain label, shape (n, 3, 3)."""
+    from .fill import average_orientations
+
+    n = int(labels.max()) + 1
+    means = np.tile(np.eye(3), (n, 1, 1))
+    for label in range(n):
+        atoms = np.unique(index[labels == label])
+        if atoms.size == 0:
+            continue
+        picked = rotations[atoms]
+        if len(picked) > sample:
+            rng = np.random.default_rng(label)
+            picked = picked[rng.choice(len(picked), sample, replace=False)]
+        means[label] = average_orientations(picked, laue, reference=picked[0])
+    return means
+
+
 def _segment_grains(index, inside, rotations, indexed, laue, tolerance):
     """Group pixels into grains, and return the labels and the neighbour pairs.
 
@@ -469,6 +507,8 @@ def save_flat_map(
     dpi: int = 200,
     wireframes=None,
     wireframe_linewidth: float = 1.4,
+    rgb=None,
+    colorbar=None,
 ):
     """Draw *flat_map*, writing it to *filename* unless that is None.
 
@@ -480,14 +520,19 @@ def save_flat_map(
     height, width = flat_map.shape
     aspect = height / width
     figure_width = 6.0
-    fig, ax = plt.subplots(figsize=(figure_width, figure_width * aspect), facecolor="white")
+    # A colour bar needs room on the right, or its tick labels are clipped.
+    extra = 1.1 if colorbar is not None else 0.0
+    fig, ax = plt.subplots(
+        figsize=(figure_width + extra, figure_width * aspect), facecolor="white"
+    )
     fig.subplots_adjust(
         left=0.08 if axes_labels else 0.02,
-        right=0.98,
+        right=(0.98 * figure_width / (figure_width + extra)) if colorbar is not None else 0.98,
         top=0.93 if title else 0.98,
         bottom=0.08 if axes_labels else 0.02,
     )
-    ax.imshow(flat_map.rgb, origin="lower", extent=flat_map.extent, interpolation="nearest")
+    image = flat_map.rgb if rgb is None else rgb
+    ax.imshow(image, origin="lower", extent=flat_map.extent, interpolation="nearest")
     ax.set_xticks([])
     ax.set_yticks([])
     for spine in ax.spines.values():
@@ -507,6 +552,18 @@ def save_flat_map(
         from .wireframe import draw_wireframes
 
         draw_wireframes(ax, wireframes, linewidth=wireframe_linewidth)
+
+    if colorbar is not None:
+        # (vmin, vmax, cmap, label): a bar for boundaries coloured by angle.
+        import matplotlib
+        from matplotlib import cm, colors
+
+        vmin, vmax, cmap, label = colorbar
+        mappable = cm.ScalarMappable(
+            norm=colors.Normalize(vmin=vmin, vmax=vmax), cmap=matplotlib.colormaps[cmap]
+        )
+        bar = fig.colorbar(mappable, ax=ax, fraction=0.046, pad=0.03)
+        bar.set_label(label, fontsize=9)
 
     if filename is not None:
         fig.savefig(filename, dpi=dpi)

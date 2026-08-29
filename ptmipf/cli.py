@@ -165,6 +165,38 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-scale-bar", action="store_true", help="omit the scale bar on the flat map"
     )
     group.add_argument(
+        "--boundary-scale",
+        nargs="?",
+        const="0,90",
+        metavar="MIN,MAX",
+        help="colour the boundaries by misorientation on a colour scale over "
+        "this range in degrees (default 0,90)",
+    )
+    group.add_argument(
+        "--boundary-cmap", default="viridis", help="colormap for --boundary-scale"
+    )
+    group.add_argument(
+        "--boundary-axis",
+        metavar="HKIL",
+        help="measure the boundary angle as the tilt of this crystal axis, e.g. "
+        "0001 for the hcp c axis, instead of the full disorientation",
+    )
+    group.add_argument(
+        "--boundary-threshold",
+        type=float,
+        metavar="DEG",
+        help="draw boundaries at or above this angle in --boundary-high-color "
+        "and the rest in --boundary-low-color (or hide them)",
+    )
+    group.add_argument("--boundary-high-color", default="black")
+    group.add_argument(
+        "--boundary-low-color",
+        help="colour for boundaries below the threshold; omit to hide them",
+    )
+    group.add_argument(
+        "--boundary-width", type=int, default=1, help="boundary line width in pixels"
+    )
+    group.add_argument(
         "--wireframes",
         action="store_true",
         help="draw a unit cell wireframe on each distinct orientation of the flat map",
@@ -631,6 +663,40 @@ def main(argv=None) -> int:
                 c_over_a=args.c_over_a if args.c_over_a is not None else float(np.sqrt(8.0 / 3.0)),
                 one_per_orientation=args.wireframe_one_per_orientation,
             )
+        rgb_override = None
+        colorbar = None
+        if args.boundary_scale or args.boundary_threshold is not None:
+            from . import boundaries
+
+            angles = None
+            if args.boundary_axis:
+                angles = boundaries.boundary_axis_angles(
+                    flat,
+                    args.boundary_axis,
+                    c_over_a=(
+                        args.c_over_a if args.c_over_a is not None else float(np.sqrt(8.0 / 3.0))
+                    ),
+                )
+            if args.boundary_threshold is not None:
+                rgb_override = boundaries.color_boundaries_by_threshold(
+                    flat,
+                    threshold=args.boundary_threshold,
+                    high_color=args.boundary_high_color,
+                    low_color=args.boundary_low_color,
+                    angles=angles,
+                    width=args.boundary_width,
+                )
+            else:
+                lo, hi = (float(v) for v in args.boundary_scale.split(","))
+                rgb_override = boundaries.color_boundaries_by_angle(
+                    flat, vmin=lo, vmax=hi, cmap=args.boundary_cmap, angles=angles,
+                    width=args.boundary_width,
+                )
+                label = (
+                    f"{args.boundary_axis} tilt (degrees)" if args.boundary_axis
+                    else "misorientation (degrees)"
+                )
+                colorbar = (lo, hi, args.boundary_cmap, label)
         save_flat_map(
             flat,
             args.flat_map,
@@ -638,6 +704,8 @@ def main(argv=None) -> int:
             title=f"IPF {result.direction_label}",
             dpi=args.dpi,
             wireframes=wireframes,
+            rgb=rgb_override,
+            colorbar=colorbar,
         )
         if not args.quiet:
             print(

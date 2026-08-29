@@ -134,6 +134,40 @@ frames = grain_wireframes(flat, tolerance_deg=5, color="invert", c_over_a=1.6236
 save_flat_map(flat, "map.png", wireframes=frames)
 ```
 
+### Colouring the boundaries by misorientation
+
+The boundaries of a flat map can be coloured by the angle across them, on a colour
+scale over a chosen range, or split at a threshold into high and low angle boundaries:
+
+```bash
+# boundaries on a 0 to 90 degree colour scale, with a colour bar
+ptmipf mg.dump --structures hcp --direction nd --view nd --slice-width 10 \
+    --flat-map map.png --boundary-scale 0,90 --boundary-cmap plasma --boundary-width 2
+
+# high angle boundaries (15 degrees and above) black, the rest hidden
+ptmipf mg.dump ... --flat-map map.png --boundary-threshold 15 --boundary-high-color black
+
+# the same, but measuring the tilt of the c axis across each boundary
+ptmipf mg.dump ... --flat-map map.png --boundary-scale 0,90 --boundary-axis 0001
+```
+
+The angle is the disorientation between the two grains' mean orientations, reduced by
+the crystal symmetry, so a boundary has one angle along its length rather than
+pixel-to-pixel noise. `--boundary-axis` measures the angle between one crystal axis in
+the two grains instead, which for hexagonal metals is the c axis tilt, the quantity that
+separates a twin from a slightly rotated neighbour. `--boundary-low-color` draws the
+boundaries below the threshold too, faintly for instance; without it they take the grain
+colour and vanish.
+
+```python
+from ptmipf import boundaries
+
+rgb = boundaries.color_boundaries_by_angle(flat, vmin=0, vmax=90, cmap="plasma", width=2)
+c_tilt = boundaries.boundary_axis_angles(flat, "0001", c_over_a=1.6236)
+rgb = boundaries.color_boundaries_by_threshold(flat, 15, "black", "white", angles=c_tilt)
+save_flat_map(flat, "map.png", rgb=rgb, colorbar=(0, 90, "plasma", "misorientation"))
+```
+
 ### Filling the grain boundaries
 
 PTM gives no orientation to disordered atoms, so grain boundaries appear as gaps. They can
