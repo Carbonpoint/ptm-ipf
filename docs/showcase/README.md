@@ -66,6 +66,17 @@ blue grain and one wide deformation band through the pink one; the sections coun
 274 grains where the random run counts 150 to 321. `compare_cu_texture_ipf{x,z}.png` puts
 the two side by side, same sections, same projection, same colour key.
 
+**cu_extruded_T and cu_extruded_C** (631k atoms, 15% tension and compression along the
+<111> + <100> double fibre): the asymmetry runs the other way from the rolled cell. In
+tension 11.2 percent of the atoms end up hcp and the sections count 166 to 261 grains; in
+compression it is 13.6 percent and 426 to 690 grains, the most fragmented microstructure of
+the campaign. For a <111> fibre loaded along its axis, the leading partial has the higher
+Schmid factor in compression, so the twins form more readily when the fibre is pushed; for
+the rolled cell the same argument favours tension. Same tool, same sections, opposite
+answers, both the ones crystal plasticity predicts. `compare_cu_extruded_loading_ipf{x,z}.png`
+is the pair, and `compare_cu_tension_textures_ipfx.png` puts the three textures in tension
+side by side.
+
 **ti_rolled_C** (410k atoms, 12% compression along RD, basal texture): the built texture
 is a single 180 MRD {0001} spot at ND, and it does not twin. Compression perpendicular to
 the c axis cannot drive {10-12} extension twinning, which needs the c axis to lengthen, so
@@ -73,8 +84,10 @@ the strain goes to prismatic slip and the section stays a handful of large grain
 colour family, with only a few small twin nuclei (the pink islands at 50 degrees in the
 boundary map). The grain counts fall to 30 to 88 per section from the 150 to 321 cells of
 the random run: a single crystallographic texture, loaded the wrong way for twinning, is
-the least fragmented microstructure of the set. The extruded Ti run, pulled along a
-<10-10> fibre, is the one loaded to twin.
+the least fragmented microstructure of the set. The animation makes the
+distinction a still map cannot: the twin nuclei appear early and never grow, so this is a
+cell that did not twin, rather than one that twinned and detwinned. The extruded Ti run,
+pulled along a <10-10> fibre, is the one loaded to twin.
 
 **cu_rolled_T** (638k atoms, 15% tension): the same starting structure as cu_rolled_C,
 pulled instead of pushed. It twins far more: 12.4 percent hcp against 8.3, and 514 grains

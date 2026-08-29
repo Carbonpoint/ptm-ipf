@@ -405,12 +405,13 @@ the reader can check against the literature: Cu (Mishin 2001), Fe (Mendelev 2003
 in tension and compression. Every starting structure was built from explicit rotation
 matrices recorded beside it, and ptm-ipf recovers every built grain to within 0.001 degrees.
 
-[![Cu polycrystals at 15 percent strain](docs/showcase/compare_cu_all_ipfx.png)](docs/showcase/README.md)
+[![Cu polycrystals at 15 percent tension](docs/showcase/compare_cu_tension_textures_ipfx.png)](docs/showcase/README.md)
 
-The same IPF-X projection of the same three sections through three copper runs: random
-texture in tension, rolled texture in tension, rolled texture in compression. The unit cell
-on each grain shows the texture, the boundaries show the twins, and the rolled cell twins
-three times as much in tension as in compression.
+The same IPF-X projection of the same three sections through three copper cells at 15
+percent tension: random, rolled and extruded textures. The unit cell on each grain shows
+the texture, the boundaries show the twins. The rolled cell twins three times as much in
+tension as in compression, the extruded cell the other way round, and both are the signs
+crystal plasticity predicts from the Schmid factors of the partial dislocations.
 
 ## Conventions
 
