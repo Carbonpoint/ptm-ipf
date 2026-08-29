@@ -41,14 +41,59 @@ per second, about 1.5 hours per run.
 | `evolution_render.gif` | rendered z section through every frame | animation |
 | `stats.json` | structure counts, grains per section, timing | |
 
-## What the first runs show
+## The ten runs at a glance
 
-**cu_random_T** (632k atoms, 15% tension): yield at 2.2 GPa near 6 percent strain. By the
+| run | atoms | texture | load | peak stress | at strain | final stress | atoms PTM labels close-packed | grains per section (x, y, z) |
+|---|---|---|---|---|---|---|---|---|
+| cu_random_T | 632,412 | random | tension | 2.23 GPa | 7.0% | 1.94 GPa | hcp 12.0% | 279, 355, 525 |
+| cu_rolled_T | 637,665 | rolled | tension | 2.31 GPa | 4.6% | 1.85 GPa | hcp 12.4% | 209, 260, 514 |
+| cu_rolled_C | 637,665 | rolled | compression | 2.64 GPa | 5.2% | 2.29 GPa | hcp 8.3% | 266, 124, 274 |
+| cu_extruded_T | 631,371 | extruded | tension | 2.52 GPa | 13.9% | 2.40 GPa | hcp 11.2% | 166, 232, 261 |
+| cu_extruded_C | 631,371 | extruded | compression | 2.52 GPa | 5.9% | 2.16 GPa | hcp 13.7% | 690, 426, 529 |
+| fe_random_T | 610,364 | random | tension | 4.99 GPa | 7.2% | 4.15 GPa | hcp 3.8% | 279, 434, 422 |
+| fe_rolled_C | 643,992 | rolled | compression | 5.80 GPa | 10.7% | 5.34 GPa | hcp 3.2% | 303, 157, 366 |
+| ti_random_T | 413,296 | random | tension | 2.30 GPa | 11.1% | 2.27 GPa | fcc 0.6% | 150, 200, 321 |
+| ti_rolled_C | 410,297 | rolled | compression | 2.16 GPa | 8.1% | 1.97 GPa | fcc 1.0% | 60, 30, 88 |
+| ti_extruded_T | 410,253 | extruded | tension | 2.22 GPa | 11.3% | 2.15 GPa | fcc 0.7% | 136, 91, 220 |
+
+Peak and final stress are the absolute value of the tensile stress along x. "Atoms PTM
+labels close-packed" is the fraction of atoms PTM assigns to hcp or fcc at the final
+frame: in copper that is stacking faults and twins, a real quantity; in iron at the 0.15
+cutoff it is thermal misidentification of distorted bcc, not a phase, and in titanium the
+sub-percent fcc is the same. Grains per section are what the flat map segmentation counts
+in the three 10 A mid-cell sections, and include the cells that slip produces inside the
+built grains.
+
+## What the campaign shows
+
+Three crystal structures, three deformation modes, and the tool separates them from the
+orientation field alone. Copper twins in every texture, and the sign of its
+tension-compression asymmetry flips between the rolled cell (three times more twinning in
+tension) and the extruded cell (more in compression), both as the Schmid factors of the
+partial dislocations predict. Titanium on this potential twins in none of its three
+textures at this grain size and rate; it fragments by slip, and the texture sets how much,
+from 30 cells per section for the basal cell under compression to 321 for random. Iron
+deforms by slip in both textures and is the strongest of the three by a factor of two.
+
+The unit cell wireframes carry the texture story without the colour key: cubes in every
+attitude for random copper, in aligned pairs for the rolled components, standing on a body
+diagonal for the <111> fibre; hexagonal prisms face-on for basal titanium and edge-on with
+a common axis for the <10-10> fibre. The boundary colouring carries the deformation story:
+yellow 60 degree Sigma 3 lamellae through the copper grains, purple low angle cells inside
+the titanium and iron grains, and nothing in between.
+
+Every run took about 1.5 hours on 32 cores for the molecular dynamics and 6 to 7 minutes on
+ghost for the full figure set, with the flat map animations at one frame per 5 to 10
+seconds.
+
+## What the runs show, one by one
+
+**cu_random_T** (632k atoms, 15% tension): yield at 2.2 GPa near 7 percent strain. By the
 final frame 12 percent of the atoms are hcp, which in fcc copper means stacking faults and
 deformation twins. The boundary map colours the twin boundaries yellow at 60 degrees, the
-Sigma 3 relation, as parallel lamellae through five of the grains, against the purple
-low angle boundaries the grains started with. The animation shows them appear one at a
-time from 4 percent strain on.
+Sigma 3 relation, as parallel lamellae through most of the grains, against the purple low
+angle boundaries the grains started with; the sections count 279 to 525 grains from the
+20 built. The animation shows the twins appear one at a time from 4 percent strain on.
 
 **ti_random_T** (413k atoms, 12% tension): the section shows no twin lamellae; the
 deformation is in small low angle cells inside the grains, the purple loops in the boundary
@@ -101,11 +146,28 @@ case, and the difference the texture makes is how much: 30 to 88 cells per secti
 basal cell under compression, 91 to 220 for the <10-10> fibre under tension, 150 to 321 for
 random. `compare_ti_all_ipf{x,z}.png` puts the three side by side.
 
-**fe_random_T** (610k atoms, 15% tension): bcc iron on the Mendelev potential stays bcc,
-75 percent identified and the rest grain boundary, with no fcc or hcp beyond noise. The
-sections count 85 to 254 grains from the 20 built, so the deformation fragments the grains
-into cells, as random Ti did, rather than twinning them as copper did. Iron at 300 K on
-this potential deforms by slip.
+**fe_random_T and fe_rolled_C** (610k and 644k atoms, 15% tension and compression): bcc
+iron on the Mendelev 2003 potential deforms by slip in both textures. Neither section
+shows a twin lamella; the boundary maps are ordinary 40 to 50 degree grain boundaries with
+low angle cells inside the grains, and the grain counts (279 to 434 per section for random,
+157 to 366 for the rolled alpha fibre) are those cells. Iron is the strongest material of
+the set, peaking near 5 GPa in tension and 5.6 in compression, against 2.2 to 2.6 for
+copper and 2.2 to 2.3 for titanium. The rolled cell's {110} pole figure shows the alpha
+fibre as a single 24 MRD spot at RD, and its IPF-X map is one green colour family: every
+grain has <110> within a few degrees of the compression axis, as built.
+
+Two things this pair taught about the pipeline rather than the metal. The PTM RMSD cutoff
+of 0.1 that suits fcc copper is too tight for bcc iron at 300 K: its larger thermal
+displacements push 3 percent of the grain interiors over it, and at 0.1 they go unindexed.
+Both iron figure sets use 0.15. And the large white region in the random cell's z section
+is not a phase, a twin, or a cutoff effect: it is there in the first frame, before any
+strain, and no fill radius closes it. It is a poorly crystallised zone left by the builder,
+whose overlap trimming at the Voronoi boundaries thins the as-built cell to 82 percent of
+the ideal bcc density, and 20 ps at 300 K is far too short for iron to recrystallise 30 A
+of disorder. The flat map reports it correctly as unindexable, which is the right answer
+from the tool and a lesson for the next build: relax the boundaries longer, or trim less.
+
+`compare_fe_texture_ipf{x,z}.png` puts the two side by side.
 
 **cu_rolled_T** (638k atoms, 15% tension): the same starting structure as cu_rolled_C,
 pulled instead of pushed. It twins far more: 12.4 percent hcp against 8.3, and 514 grains
