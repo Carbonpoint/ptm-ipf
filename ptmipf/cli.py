@@ -343,6 +343,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     group.add_argument("--dpi", type=int, default=200, help="resolution of the written figures")
 
+    group = parser.add_argument_group(
+        "animation",
+        "Animate one section through every frame of a trajectory.  The input is "
+        "then a glob such as 'run.*.dump', quoted so the shell leaves it alone.",
+    )
+    group.add_argument("--animate", metavar="FILE", help="write an .mp4 or .gif here")
+    group.add_argument(
+        "--animate-render",
+        action="store_true",
+        help="animate rendered atoms instead of a flat map",
+    )
+    group.add_argument(
+        "--strain-rate",
+        type=float,
+        metavar="PER_PS",
+        help="signed strain rate of the run, to stamp each frame with its strain",
+    )
+    group.add_argument("--fps", type=int, default=4, help="frames per second (default: 4)")
+    group.add_argument(
+        "--workers", type=int, default=1, help="frames rendered in parallel (flat maps only)"
+    )
+
     group = parser.add_argument_group("rendering")
     group.add_argument("--render", metavar="PNG", help="render an IPF-coloured image with OVITO")
     group.add_argument(
@@ -478,6 +500,42 @@ def _build_selection(args, result, structures, coloured):
     return selection.invert(mask) if args.invert_selection else mask
 
 
+def _animate(args) -> int:
+    """The --animate path: many frames, one section, one video."""
+    from .animate import animate_flat_map, animate_render, frame_files
+
+    files = frame_files(args.input)
+    if not files:
+        raise SystemExit(f"no frames match {args.input!r}")
+    axes = {name: getattr(args, name) for name in ("rd", "td", "nd", "ed") if getattr(args, name)}
+    frame = SampleFrame(axes)
+    structures = _parse_structure_list(args.structures)
+    view = args.view or args.slice_normal or "z"
+    slab = args.slice_width or 10.0
+    fill = args.fill_boundaries
+    if args.animate_render:
+        pngs = animate_render(
+            files, args.animate, direction=args.direction, view=view, structures=structures,
+            frame=frame, slab_width=slab, hide_other=args.hide_other, fill=fill,
+            tripod=args.tripod, rate=args.strain_rate, fps=args.fps,
+        )
+    else:
+        scale = None
+        if args.boundary_scale:
+            lo, hi = (float(v) for v in args.boundary_scale.split(","))
+            scale = (lo, hi, args.boundary_cmap)
+        pngs = animate_flat_map(
+            files, args.animate, direction=args.direction, view=view, structures=structures,
+            frame=frame, slab_width=slab, pixel_size=args.pixel_size, fill=fill,
+            boundary_angle=args.boundary_angle, boundary_scale=scale,
+            wireframes=args.wireframes, rate=args.strain_rate, fps=args.fps,
+            workers=args.workers,
+        )
+    if not args.quiet:
+        print(f"wrote {args.animate} ({len(pngs)} frames)")
+    return 0
+
+
 def _color(text: str):
     parts = [float(t) for t in text.replace(",", " ").split()]
     if len(parts) != 3:
@@ -498,6 +556,9 @@ def main(argv=None) -> int:
 
     if not args.input:
         parser.error("an input file is required (or use --list-structures)")
+
+    if args.animate:
+        return _animate(args)
 
     from .analysis import analyse
 

@@ -168,6 +168,31 @@ rgb = boundaries.color_boundaries_by_threshold(flat, 15, "black", "white", angle
 save_flat_map(flat, "map.png", rgb=rgb, colorbar=(0, 90, "plasma", "misorientation"))
 ```
 
+### Animations
+
+A deformation trajectory can be animated as the same section through every frame, as a
+flat map or as rendered atoms, with the strain stamped on each frame:
+
+```python
+from ptmipf.animate import frame_files, animate_flat_map, animate_render
+
+files = frame_files("run.*.dump")          # sorted by step number
+animate_flat_map(files, "twins.mp4", direction="x", view="z", rate=0.001,
+                 boundary_scale=(0, 60, "plasma"), wireframes=True, workers=8)
+animate_render(files, "cell.gif", view="z", slab_width=10, fill=6, rate=0.001)
+```
+
+Or from the command line, with the frames given as a quoted glob:
+
+```bash
+ptmipf 'run.*.dump' --structures fcc,hcp,bcc --direction x --view z --slice-width 10 \
+    --fill-boundaries 6 --boundary-scale 0,60 --wireframes --strain-rate 0.001 \
+    --animate twins.mp4 --workers 8
+```
+
+Frames are padded to a common size rather than resized, so the scale bar stays honest as
+the cell deforms. MP4 output needs `pip install 'imageio[ffmpeg]'`; GIF needs only Pillow.
+
 ### Filling the grain boundaries
 
 PTM gives no orientation to disordered atoms, so grain boundaries appear as gaps. They can
