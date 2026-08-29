@@ -66,6 +66,16 @@ blue grain and one wide deformation band through the pink one; the sections coun
 274 grains where the random run counts 150 to 321. `compare_cu_texture_ipf{x,z}.png` puts
 the two side by side, same sections, same projection, same colour key.
 
+**ti_rolled_C** (410k atoms, 12% compression along RD, basal texture): the built texture
+is a single 180 MRD {0001} spot at ND, and it does not twin. Compression perpendicular to
+the c axis cannot drive {10-12} extension twinning, which needs the c axis to lengthen, so
+the strain goes to prismatic slip and the section stays a handful of large grains in one
+colour family, with only a few small twin nuclei (the pink islands at 50 degrees in the
+boundary map). The grain counts fall to 30 to 88 per section from the 150 to 321 cells of
+the random run: a single crystallographic texture, loaded the wrong way for twinning, is
+the least fragmented microstructure of the set. The extruded Ti run, pulled along a
+<10-10> fibre, is the one loaded to twin.
+
 **cu_rolled_T** (638k atoms, 15% tension): the same starting structure as cu_rolled_C,
 pulled instead of pushed. It twins far more: 12.4 percent hcp against 8.3, and 514 grains
 in the z section against 274, most of them twin lamellae. That is the tension-compression

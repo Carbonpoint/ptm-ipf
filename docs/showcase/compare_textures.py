@@ -31,7 +31,7 @@ def compare(runs, labels, projection, out_path, title, structure, laue):
                               fontsize=13, labelpad=8, y=0.62)
     # With fewer columns the panels reach further right, so the key sits
     # above them rather than beside the last one, and gets its own room.
-    box = [0.70, 0.815, 0.16, 0.125] if laue != "6/mmm" else [0.70, 0.860, 0.14, 0.072]
+    box = [0.70, 0.815, 0.16, 0.125] if laue != "6/mmm" else [0.66, 0.845, 0.20, 0.10]
     key = fig.add_axes(box)
     ipf_legend(laue, direction_label=projection.upper(), structure_label=structure, ax=key)
     _draw_parent_axes(fig, left, bottom, gap_y, structure, laue)
