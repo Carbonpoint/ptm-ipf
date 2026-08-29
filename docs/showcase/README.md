@@ -89,6 +89,24 @@ distinction a still map cannot: the twin nuclei appear early and never grow, so 
 cell that did not twin, rather than one that twinned and detwinned. The extruded Ti run,
 pulled along a <10-10> fibre, is the one loaded to twin.
 
+**ti_extruded_T** (410k atoms, 12% tension along the <10-10> fibre): built so that every
+c axis is perpendicular to the tensile axis, which is the loading that {10-12} extension
+twinning needs, and it still does not twin in the section: the boundary map is a single
+green colour family with ordinary grain boundaries and low angle cells, no lamellae, and
+the 220 grains counted in the z section are cells. Two things are consistent with that. The
+Mendelev 2016 Ti potential has a high twin nucleation stress, and at 20 grains in a 200 A
+box with a 0.0005/ps rate there is little room for a twin to nucleate before slip relieves
+the stress. So across the three Ti runs the microstructure fragments by slip in every
+case, and the difference the texture makes is how much: 30 to 88 cells per section for the
+basal cell under compression, 91 to 220 for the <10-10> fibre under tension, 150 to 321 for
+random. `compare_ti_all_ipf{x,z}.png` puts the three side by side.
+
+**fe_random_T** (610k atoms, 15% tension): bcc iron on the Mendelev potential stays bcc,
+75 percent identified and the rest grain boundary, with no fcc or hcp beyond noise. The
+sections count 85 to 254 grains from the 20 built, so the deformation fragments the grains
+into cells, as random Ti did, rather than twinning them as copper did. Iron at 300 K on
+this potential deforms by slip.
+
 **cu_rolled_T** (638k atoms, 15% tension): the same starting structure as cu_rolled_C,
 pulled instead of pushed. It twins far more: 12.4 percent hcp against 8.3, and 514 grains
 in the z section against 274, most of them twin lamellae. That is the tension-compression
