@@ -75,7 +75,9 @@ def animate_flat_map(
     boundary_scale
         ``(vmin, vmax, cmap)`` to colour the boundaries by misorientation.
     workers
-        Frames are independent, so they can be rendered in parallel.
+        Frames are independent, so they can be rendered in parallel.  Keep
+        this at 1 in a process that has already used OVITO: its thread pool
+        does not survive a fork, and the workers hang rather than fail.
 
     Returns
     -------

@@ -397,6 +397,21 @@ cached PTM result, so recolouring is immediate. The *CLI command* button prints 
 `ptmipf` command line that reproduces the session, so exploration turns straight into a
 scriptable analysis. See [docs/webui.md](docs/webui.md) for the full tour.
 
+## Showcase
+
+`docs/showcase/` holds a set of deformation simulations run to show the tool on materials
+the reader can check against the literature: Cu (Mishin 2001), Fe (Mendelev 2003) and Ti
+(Mendelev 2016) polycrystals of 400k to 650k atoms in random, rolled and extruded textures,
+in tension and compression. Every starting structure was built from explicit rotation
+matrices recorded beside it, and ptm-ipf recovers every built grain to within 0.001 degrees.
+
+[![Cu polycrystals at 15 percent strain](docs/showcase/compare_cu_all_ipfx.png)](docs/showcase/README.md)
+
+The same IPF-X projection of the same three sections through three copper runs: random
+texture in tension, rolled texture in tension, rolled texture in compression. The unit cell
+on each grain shows the texture, the boundaries show the twins, and the rolled cell twins
+three times as much in tension as in compression.
+
 ## Conventions
 
 These were determined empirically from OVITO and are asserted by the test suite:
