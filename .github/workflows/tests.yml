@@ -1,0 +1,25 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the OpenGL runtime OVITO links against
+        run: sudo apt-get update && sudo apt-get install -y libopengl0 libegl1 libglu1-mesa
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: uv pip install --system -e ".[test]"
+      - name: Run the tests
+        run: pytest -q
