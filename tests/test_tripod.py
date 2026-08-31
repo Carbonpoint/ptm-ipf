@@ -16,7 +16,7 @@ from ptmipf.render import MAX_TRIPOD_MARGIN, TRIPOD_MARGIN, render_result  # noq
 
 
 @pytest.fixture(scope="module")
-def result(tmp_path_factory):
+def result(tmp_path_factory, renderer):
     ase_build = pytest.importorskip("ase.build")
     ase_io = pytest.importorskip("ase.io")
     atoms = ase_build.bulk("Mg", "hcp", a=3.2094, c=5.2108).repeat((9, 9, 9))

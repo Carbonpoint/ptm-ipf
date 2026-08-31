@@ -1,5 +1,53 @@
+import os
+
 import numpy as np
 import pytest
+
+_RENDERER_STATE = {}
+
+
+def _renderer_available() -> bool:
+    """Whether OVITO can produce an image here, probed once per session.
+
+    GitHub's headless runners have no working GL at all, so every render test
+    must skip there rather than fail. PTMIPF_NO_RENDER=1 forces the negative
+    path, which is how the skip logic itself is tested.
+    """
+    if "ok" not in _RENDERER_STATE:
+        if os.environ.get("PTMIPF_NO_RENDER"):
+            _RENDERER_STATE["ok"] = False
+            return False
+        try:
+            import tempfile
+
+            from ptmipf.frames import SampleFrame
+            from ptmipf.render import render_result
+            from ptmipf.structures import get_structure
+
+            class _Probe:
+                positions = np.array([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]])
+                colors = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+                structure_types = np.array([1, 1])
+                n_atoms = 2
+                frame = SampleFrame()
+                structures = (get_structure("fcc"),)
+                type_codes = {"fcc": 1}
+                cell = None
+
+            with tempfile.NamedTemporaryFile(suffix=".png") as handle:
+                render_result(_Probe(), handle.name, size=(32, 32))
+            _RENDERER_STATE["ok"] = True
+        except Exception:
+            _RENDERER_STATE["ok"] = False
+    return _RENDERER_STATE["ok"]
+
+
+@pytest.fixture(scope="session")
+def renderer():
+    """Tests that draw with OVITO take this fixture and skip without a renderer."""
+    if not _renderer_available():
+        pytest.skip("no OVITO renderer available in this environment")
+
 
 
 def rotation_matrix(axis, degrees):

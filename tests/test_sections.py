@@ -73,7 +73,7 @@ def test_cli_exposes_the_section_options():
     assert args.perspective is False
 
 
-def test_cli_renders_a_section(write_crystal, tmp_path):
+def test_cli_renders_a_section(write_crystal, tmp_path, renderer):
     pytest.importorskip("ovito")
     from ptmipf.cli import main
 

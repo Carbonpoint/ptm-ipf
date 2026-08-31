@@ -167,7 +167,7 @@ def test_analysis_counts(analysed):
     assert result["direction_label"] == "Z"
 
 
-def test_render_is_red_for_basal_ipf_z(base, analysed):
+def test_render_is_red_for_basal_ipf_z(base, analysed, renderer):
     status, headers, body = _get(base, "/api/render?w=400&h=300")
     assert status == 200 and headers["Content-Type"] == "image/png"
     image = _decode_png(body)
@@ -180,7 +180,7 @@ def test_render_is_red_for_basal_ipf_z(base, analysed):
     assert mean[0] > mean[1] + 0.2 and mean[0] > mean[2] + 0.2
 
 
-def test_recolour_changes_direction_without_rerun(base, analysed):
+def test_recolour_changes_direction_without_rerun(base, analysed, renderer):
     outcome = _post_json(
         base,
         "/api/analyse",
@@ -226,7 +226,7 @@ def test_slice_bounds(base, analysed):
     assert bounds["min"] < bounds["max"]
 
 
-def test_sliced_render(base, analysed):
+def test_sliced_render(base, analysed, renderer):
     _, _, body = _get(base, "/api/render?w=300&h=240&hide_other=1&slice_axis=z&slice_frac=0.5")
     assert _decode_png(body).shape[:2] == (240, 300)
 
@@ -343,7 +343,7 @@ def test_selection_misorientation_from_atom(base, analysed):
     assert outcome["count"] == analysed["result"]["counts"]["hcp"]
 
 
-def test_selection_figures_and_export(base, analysed):
+def test_selection_figures_and_export(base, analysed, renderer):
     _needs_select(base)
     count = _post_json(
         base,
@@ -402,7 +402,7 @@ def test_flat_map_pixel_size_changes_the_resolution(base, analysed):
     assert int(fine.split("x")[0]) > int(coarse.split("x")[0])
 
 
-def test_boundary_filling_is_a_no_op_on_a_fully_indexed_crystal(base, analysed):
+def test_boundary_filling_is_a_no_op_on_a_fully_indexed_crystal(base, analysed, renderer):
     """The served crystal has no unindexed atoms, so filling must change nothing.
 
     That filling does colour the boundaries is covered at the library level in
@@ -414,7 +414,7 @@ def test_boundary_filling_is_a_no_op_on_a_fully_indexed_crystal(base, analysed):
     assert np.allclose(plain, filled, atol=0.02)
 
 
-def test_fill_parameters_are_accepted_by_every_image_endpoint(base, analysed):
+def test_fill_parameters_are_accepted_by_every_image_endpoint(base, analysed, renderer):
     for path in (
         "/api/render?w=200&h=160&fill_radius=6&fill_min_neighbours=4",
         "/api/figure/poles?poles=0001&fill_radius=6",
@@ -427,7 +427,7 @@ def test_fill_parameters_are_accepted_by_every_image_endpoint(base, analysed):
         assert _decode_png(body).ndim == 3, path
 
 
-def test_tripod_overlay_renders_and_picking_still_works(base, analysed):
+def test_tripod_overlay_renders_and_picking_still_works(base, analysed, renderer):
     _, _, body = _get(base, "/api/render?w=300&h=240&tripod=1")
     assert _decode_png(body).shape[:2] == (240, 300)
     # The pick endpoint receives the same options, including ones it must ignore.
