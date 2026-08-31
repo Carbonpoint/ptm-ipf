@@ -18,9 +18,17 @@ engineering rate with the transverse directions at zero pressure. Frames every 5
 | Fe | Mendelev et al. 2003, eam/fs | bcc | random, rolled (alpha fibre) | tension and compression | 0.001/ps | 15% |
 | Ti | Mendelev et al. 2016, eam/fs | hcp | random, rolled (basal), extruded (<10-10> fibre) | tension and compression | 0.0005/ps | 12% |
 
-The rolled and extruded textures are the ideal components with an 8 to 15 degree spread,
-built by `scripts/build_poly.py`; the JSON beside each `.data` file lists every grain's
-rotation matrix. Runs are named `<element>_<texture>_<T|C>`.
+The rolled and extruded textures are the ideal components with an 8 to 15 degree spread;
+the JSON beside each `.data` file lists every grain's rotation matrix. The campaign ran on
+`build_poly.py`, which placed rotated lattice blocks by hand and trimmed overlaps, leaving
+the as-built cells at 82 to 93 percent of ideal density; that is the origin of the
+unindexable zone in the random iron cell. `build_poly2.py` replaces it: atomsk builds the
+Voronoi geometry at full density (99.9 to 100.0 percent, verified), and the same explicit
+rotation matrices are converted to atomsk's node angles, which are not Euler angles but
+extrinsic rotations about x, y and z composing as Rz Ry Rx, established by building single
+grains at known angles and measuring them with PTM (exact to 0.01 degrees). PTM recovers
+every grain of a v2 build to 0.000 degrees, and a rolled Ti test cell reproduces its basal
+fibre. Use v2 for any future run. Runs are named `<element>_<texture>_<T|C>`.
 
 LAMMPS 29 Aug 2024 on the lab workstations, CPU only: 32 cores give 12 million atom-steps
 per second, about 1.5 hours per run.
