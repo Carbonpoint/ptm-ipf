@@ -20,6 +20,6 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install
-        run: uv pip install --system -e ".[test]"
+        run: uv pip install -e ".[test]"
       - name: Run the tests
         run: pytest -q
