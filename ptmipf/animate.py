@@ -234,7 +234,7 @@ def _stamp(png, text):
 
 
 def _pad_to_common_size(pngs):
-    """Pad every still to the largest width and height among them, on white.
+    """Pad every still to the largest even width and height among them, on white.
 
     A deforming cell changes the map's aspect from frame to frame, and a video
     needs every frame the same size.  Padding, rather than resizing, keeps the
@@ -245,6 +245,12 @@ def _pad_to_common_size(pngs):
     sizes = [Image.open(p).size for p in pngs]
     width = max(w for w, _ in sizes)
     height = max(h for _, h in sizes)
+    # H.264 with yuv420p chroma subsampling cannot encode an odd width or
+    # height, and macro_block_size=1 below turns off imageio's own rounding,
+    # so an odd-sized frame reaches ffmpeg and kills it with a broken pipe.
+    # One extra white pixel costs nothing and keeps the scale bar honest.
+    width += width % 2
+    height += height % 2
     for p, (w, h) in zip(pngs, sizes):
         with Image.open(p) as image:
             # Every frame becomes RGB, whatever matplotlib or OVITO wrote, so

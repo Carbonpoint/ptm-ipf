@@ -25,8 +25,22 @@ def test_padding_gives_every_frame_the_same_size(tmp_path):
     _pad_to_common_size(paths)
     sizes = {PIL.open(p).size for p in paths}
     modes = {PIL.open(p).mode for p in paths}
-    assert sizes == {(50, 35)}
+    # 35 is rounded up to 36: H.264 cannot encode an odd dimension.
+    assert sizes == {(50, 36)}
     assert modes == {"RGB"}
+
+
+def test_odd_sized_frames_still_encode(tmp_path):
+    """libx264 with yuv420p rejects odd dimensions, so padding must round up."""
+    PIL = pytest.importorskip("PIL.Image")
+    pytest.importorskip("imageio_ffmpeg")
+    paths = []
+    for i in range(3):
+        p = tmp_path / f"{i}.png"
+        PIL.new("RGB", (33, 25), (i * 80, 0, 0)).save(p)
+        paths.append(str(p))
+    mp4 = write_video(paths, tmp_path / "odd.mp4", fps=2)
+    assert Path(mp4).stat().st_size > 0
 
 
 def test_gif_and_mp4_are_written(tmp_path):
