@@ -42,12 +42,30 @@ the proper IPF colour keys but work on EBSD maps, not on atoms.
 
 ## Install
 
+With [uv](https://docs.astral.sh/uv/) (recommended; installs the whole environment in
+seconds):
+
+```bash
+uv venv && uv pip install git+https://github.com/Carbonpoint/ptm-ipf.git
+```
+
+or with pip:
+
 ```bash
 pip install git+https://github.com/Carbonpoint/ptm-ipf.git
 ```
 
 On a bare Linux machine OVITO also needs the OpenGL runtime:
-`sudo apt install libopengl0 libegl1`.
+`sudo apt install libopengl0 libegl1`. Without root, a symlink works:
+`ln -s /usr/lib/x86_64-linux-gnu/libGL.so.1 <somewhere>/libOpenGL.so.0` and run with
+`LD_LIBRARY_PATH=<somewhere>`.
+
+For development:
+
+```bash
+git clone https://github.com/Carbonpoint/ptm-ipf.git && cd ptm-ipf
+uv venv && uv pip install -e ".[test]" && uv run --no-project pytest -q
+```
 
 ## Quick start
 
