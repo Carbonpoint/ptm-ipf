@@ -10,13 +10,14 @@ for line in Path("/home/user/showcase/peaks.txt").read_text().splitlines():
         peaks[m.group(1)] = (float(m.group(2)), float(m.group(3)), float(m.group(4)))
 
 ORDER = ["cu_random_T", "cu_rolled_T", "cu_rolled_C", "cu_extruded_T", "cu_extruded_C",
-         "fe_random_T", "fe_rolled_C", "ti_random_T", "ti_rolled_C", "ti_extruded_T"]
+         "fe_random_v2_T", "fe_rolled_v2_C", "ti_random_T", "ti_rolled_C", "ti_extruded_T"]
 LABEL = {"random": "random", "rolled": "rolled", "extruded": "extruded"}
-rows = ["| run | atoms | texture | load | peak stress | at strain | final stress | non-parent phase | grains per section (x, y, z) |",
+rows = ["| run | atoms | texture | load | peak stress | at strain | final stress | atoms PTM labels close-packed | grains per section (x, y, z) |",
         "|---|---|---|---|---|---|---|---|---|"]
 for name in ORDER:
     p = F / name / "stats.json"
-    el, tex, mode = name.split("_")
+    parts = name.split("_")
+    el, tex, mode = parts[0], parts[1], parts[-1]
     load = "tension" if mode == "T" else "compression"
     if not p.exists():
         rows.append(f"| {name} | | {tex} | {load} | | | | | in progress |")

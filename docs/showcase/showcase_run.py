@@ -59,6 +59,11 @@ def main(run_dir, out_dir, rate, workers=8):
     element = name.split("_")[0]
     structure, laue, poles, c_over_a = ELEMENT[element]
     structures = ("fcc", "hcp", "bcc")
+    # The default 0.1 RMSD cutoff suits fcc copper; bcc iron at 300 K has larger
+    # thermal displacements and 0.1 rejects the distorted interiors of some
+    # grains as unindexed, which left a whole grain white in the first Fe map.
+    # 0.15 recovers them and still leaves the boundaries as boundary.
+    rmsd_cutoff = 0.15 if structure == "bcc" else 0.1
     files = frame_files(run_dir / f"{name}.*.dump")
     print(f"[{name}] {len(files)} frames, {structure}")
     t_all = time.time()
@@ -78,7 +83,8 @@ def main(run_dir, out_dir, rate, workers=8):
     plt.close(fig)
 
     # Final frame, analysed once.
-    final = analyse(files[-1], direction="x", structures=structures, frame=FRAME)
+    final = analyse(files[-1], direction="x", structures=structures, frame=FRAME,
+                    rmsd_cutoff=rmsd_cutoff)
     stats = {"name": name, "frames": len(files), "final_counts": final.counts,
              "n_atoms": final.n_atoms}
     print(f"[{name}] final: {final.counts}")
