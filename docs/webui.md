@@ -8,6 +8,14 @@ density plot, atom selections and file export) behind an interactive page:
 ptmipf-ui mg.dump                    # analyse a file and open the browser
 python -m ptmipf.webui mg.dump       # the same, without the console script
 python -m ptmipf.webui --root ~/simulations --port 8465
+ptmipf-ui --check                    # can this installation draw the 3D view?
+```
+
+On Windows, call the executable in the environment rather than activating it:
+
+```powershell
+.venv\Scripts\ptmipf-ui.exe --check
+.venv\Scripts\ptmipf-ui.exe mg.dump
 ```
 
 *(Packaging note: the console script is a one-line entry point,
@@ -59,9 +67,24 @@ header):
   can be inverted; the selected atom count updates live. The selection can be
   highlighted (or shown alone) in the 3D view, the pole figures and IPF
   density can be restricted to it, and it exports to its own `.xyz`/`.dump`.
+* **Export**: the coloured configuration goes out as `.xyz` or `.dump`, with
+  `Color.R/G/B` for the direction on screen so the file opens already coloured,
+  plus one scalar column per direction listed in the *Colour-coding columns*
+  box. Those columns drive OVITO's own Color coding modifier: load the
+  *colour map .png* from the same panel as a custom colour map, set the range
+  to 0 and 1, and switching the input property between `ipf_x`, `ipf_y` and
+  `ipf_z` switches between the three IPF maps inside OVITO, with no re-export.
+  The selection exports the same way.
 * **Reproducibility**: the *CLI command* button prints the `ptmipf` command
   line, selection flags included, that reproduces the current session, so
-  interactive exploration turns directly into a scriptable analysis.
+  interactive exploration turns directly into a scriptable analysis. It can be
+  copied wrapped over several lines for a script, copied as a single line for a
+  shell that does not honour backslash continuations (PowerShell and `cmd.exe`
+  break at the first line end), or saved to a file. The same dialog reads a
+  command back: load or paste one under *Resume from a saved command* and the
+  whole form is set from it, which is how a previous session is picked up.
+  Parsing goes through the real `ptmipf` argument parser, so the two can never
+  drift apart.
 
 ## Design notes
 
@@ -76,3 +99,13 @@ Rendering is done by OVITO on the server from the cached analysis result, so
 orbiting the view never re-runs PTM, and what the browser shows is what
 `ptmipf --render` writes. All plots are produced by the same functions as the
 CLI, which keeps the two front ends pixel-identical.
+
+## When the 3D view stays empty
+
+The 3D view is drawn by OVITO in the server process and reaches the browser as
+a PNG, so a blank viewer is nearly always a server-side renderer problem rather
+than a browser one. The page says so in the empty frame instead of showing a
+broken image, and `ptmipf-ui --check` reports the same probe on the terminal:
+which of OVITO, matplotlib, Pillow and the selection module imported, and
+whether a test scene rendered and with which renderer. The plots, the flat
+orientation map and the exports need no renderer and keep working without one.

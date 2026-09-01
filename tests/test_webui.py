@@ -32,6 +32,24 @@ if subprocess.run(
     pytest.skip("OVITO is unavailable", allow_module_level=True)
 
 
+def test_every_element_the_script_reaches_for_exists():
+    """A renamed or missing id is a silent front end failure in every browser.
+
+    ``$("...")`` returning null throws on the next property access and stops
+    the rest of the handler, which shows up as a control that simply does
+    nothing, so it is worth catching here rather than by hand.
+    """
+    import re
+
+    from ptmipf.webui.server import STATIC_DIR
+
+    html = (STATIC_DIR / "index.html").read_text()
+    script = (STATIC_DIR / "app.js").read_text()
+    declared = set(re.findall(r'id="([^"]+)"', html))
+    used = set(re.findall(r'\$\("([^"]+)"\)', script))
+    assert used <= declared, f"app.js reaches for ids the page does not define: {used - declared}"
+
+
 def _get(base, path):
     with urllib.request.urlopen(base + path, timeout=60) as response:
         return response.status, dict(response.headers), response.read()
@@ -264,6 +282,95 @@ def test_command(base, analysed):
     assert "--structures hcp,fcc" in command
     assert "--pole-figure 0001" in command
     assert "--hide-other" in command
+
+
+def test_command_has_a_one_line_form(base, analysed):
+    """PowerShell and cmd.exe break at the first line end, so a one-liner is needed."""
+    outcome = _post_json(base, "/api/command", {"poles": ["0001"]})
+    assert "\\\n" in outcome["command"]
+    assert "\n" not in outcome["one_line"]
+    assert "\\" not in outcome["one_line"]
+    assert outcome["one_line"].split() == outcome["command"].replace("\\\n", " ").split()
+
+
+def test_command_round_trips_through_the_parser(base, analysed):
+    """What the dialog writes, the dialog can read back."""
+    outcome = _post_json(
+        base,
+        "/api/command",
+        {"poles": ["0001", "10-10"], "hide_other": True, "fill_radius": 7.5,
+         "export_directions": ["nd", "z"]},
+    )
+    for form in (outcome["command"], outcome["one_line"]):
+        settings = _post_json(base, "/api/command/parse", {"command": form})
+        assert settings["analysis"]["path"].endswith("crystal.xyz")
+        assert settings["analysis"]["structures"] == ["hcp", "fcc"]
+        assert settings["ui"]["poles"] == ["0001", "10-10"]
+        assert settings["ui"]["hide_other"] is True
+        assert settings["ui"]["fill_radius"] == 7.5
+        assert settings["ui"]["export_directions"] == ["nd", "z"]
+
+
+def test_a_command_without_the_program_name_is_accepted(base):
+    settings = _post_json(
+        base, "/api/command/parse", {"command": "mg.dump --direction nd --frame 3"}
+    )
+    assert settings["analysis"]["path"] == "mg.dump"
+    assert settings["analysis"]["frame_index"] == 3
+    assert settings["colour"]["direction"] == "nd"
+
+
+def test_a_saved_command_keeps_its_comment_lines_harmless(base):
+    text = "ptmipf mg.dump \\\n    --direction z\n# note: something the CLI cannot say\n"
+    settings = _post_json(base, "/api/command/parse", {"command": text})
+    assert settings["analysis"]["path"] == "mg.dump"
+
+
+@pytest.mark.parametrize("command", ["", "mg.dump --not-an-option"])
+def test_an_unreadable_command_is_a_message_not_a_crash(base, command):
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        _post_json(base, "/api/command/parse", {"command": command})
+    assert caught.value.code == 400
+    assert "command" in json.loads(caught.value.read())["error"]
+
+
+def test_colormap_endpoint_serves_the_bar_the_columns_index(base, analysed):
+    status, headers, body = _get(base, "/api/colormap?directions=x;y;z")
+    assert status == 200
+    image = _decode_png(body)
+    entries = int(headers["X-Color-Entries"])
+    assert image.shape[1] == entries
+    assert headers["X-Color-Columns"] == "ipf_x,ipf_y,ipf_z"
+
+
+def test_export_carries_the_colour_coding_columns(base, analysed):
+    status, headers, body = _get(base, "/api/export?format=lammps-dump&directions=nd;td")
+    assert status == 200
+    assert headers["X-Color-Columns"] == "ipf_nd,ipf_td"
+    header = next(
+        line for line in body.decode().splitlines() if line.startswith("ITEM: ATOMS")
+    )
+    assert header.endswith("ipf_nd ipf_td")
+
+
+def test_export_can_leave_the_columns_out(base, analysed):
+    _, headers, body = _get(base, "/api/export?format=lammps-dump&keys=0")
+    assert "X-Color-Columns" not in headers
+    assert "ipf_" not in body.decode()
+
+
+def test_diagnostics_report_what_the_installation_can_do(base):
+    """A blank 3D view is a server-side renderer problem; this is where it shows."""
+    report = _get_json(base, "/api/diagnostics")
+    assert report["ptmipf"] and report["python"] and report["platform"]
+    names = {check["name"]: check for check in report["checks"]}
+    assert names["ovito"]["ok"]
+    assert "3D view" in names
+    if report["ok"]:
+        assert report["renderer"] in ("opengl", "tachyon")
+    else:
+        # A failure has to say what failed, or it is no use to anyone.
+        assert any(check["detail"] for check in report["checks"] if not check["ok"])
 
 
 # ----------------------------------------------------------------------

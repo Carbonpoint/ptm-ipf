@@ -116,3 +116,47 @@ def test_render_size_is_validated(crystal, tmp_path):
     with pytest.raises(SystemExit):
         main([crystal, "--structures", "hcp", "--render", str(tmp_path / "r.png"),
               "--render-size", "big"])
+
+
+def test_export_directions_are_written_with_a_colour_map(crystal, tmp_path, capsys):
+    """The default output carries x, y and z keys and the bar that decodes them."""
+    out = tmp_path / "out.dump"
+    assert main([crystal, "--structures", "hcp", "-o", str(out)]) == 0
+    header = next(
+        line for line in out.read_text().splitlines() if line.startswith("ITEM: ATOMS")
+    )
+    assert header.endswith("Color.R Color.G Color.B ipf_x ipf_y ipf_z")
+    colour_map = tmp_path / "out_colormap.png"
+    assert colour_map.exists()
+    printed = capsys.readouterr().out
+    assert "colour-coding columns: ipf_x (X), ipf_y (Y), ipf_z (Z)" in printed
+    assert "Load custom color map" in printed
+
+
+def test_export_directions_can_be_chosen_or_switched_off(crystal, tmp_path):
+    named = tmp_path / "named.xyz"
+    assert main(
+        [crystal, "--structures", "hcp", "-o", str(named),
+         "--export-direction", "nd", "--export-direction", "1,1,0"]
+    ) == 0
+    assert ":ipf_nd:R:1:ipf_1_1_0:R:1" in named.read_text().splitlines()[1]
+
+    plain = tmp_path / "plain.xyz"
+    assert main(
+        [crystal, "--structures", "hcp", "-o", str(plain), "--no-export-directions"]
+    ) == 0
+    properties = plain.read_text().splitlines()[1].split("Properties=")[1].split()[0]
+    assert properties.endswith("color:R:3")
+    assert not (tmp_path / "plain_colormap.png").exists()
+
+
+def test_a_builtin_colour_bar_reports_how_far_it_misses(crystal, tmp_path, capsys):
+    out = tmp_path / "jet.xyz"
+    assert main(
+        [crystal, "--structures", "hcp", "-o", str(out), "--color-map-gradient", "jet"]
+    ) == 0
+    printed = capsys.readouterr().out
+    assert "built-in jet colour bar" in printed
+    assert "approximation error" in printed
+    # A built-in bar carries no file of its own to write.
+    assert not (tmp_path / "jet_colormap.png").exists()

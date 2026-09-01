@@ -198,13 +198,13 @@ def _margin_clearing_the_triad(render_probe, start=TRIPOD_MARGIN) -> float:
     *render_probe* draws a small image at a given margin; a few of those cost
     far less than a figure that has to be redrawn by hand.
     """
-    import tempfile
+    from .io import temporary_path
 
     margin = start
     while margin <= MAX_TRIPOD_MARGIN:
-        with tempfile.NamedTemporaryFile(suffix=".png") as probe:
-            render_probe(margin, probe.name)
-            if _corner_is_clear(probe.name):
+        with temporary_path(".png") as probe:
+            render_probe(margin, probe)
+            if _corner_is_clear(probe):
                 return margin
         margin += 0.08
     return MAX_TRIPOD_MARGIN

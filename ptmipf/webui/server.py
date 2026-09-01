@@ -23,7 +23,6 @@ from __future__ import annotations
 import argparse
 import json
 import shlex
-import tempfile
 import threading
 import traceback
 import webbrowser
@@ -36,6 +35,7 @@ import numpy as np
 
 from .. import __version__
 from ..analysis import DEFAULT_OTHER_COLOR
+from ..io import temporary_path
 from ..polefigure import IDEAL_C_OVER_A
 from ..structures import DEFAULT_STRUCTURES, STRUCTURES
 from . import figures, rendering
@@ -69,6 +69,24 @@ def _selection_active(state: AppState, mode: str) -> np.ndarray | None:
     if mode == "off":
         return None
     return state.selection_mask
+
+
+def _export_keys(result, query: dict):
+    """Colour-coding columns for an export request.
+
+    The UI asks for x, y and z by default so that the three IPF maps can be
+    switched inside OVITO; ``directions=`` overrides the set and
+    ``keys=0`` leaves them out.
+    """
+    if not _flag(query, "keys", True):
+        return {}, None, None
+    from ..colormap import color_keys
+
+    # Semicolons, not commas: a direction may itself be a vector like 1,1,0.
+    raw = query.get("directions", ["x;y;z"])[0]
+    directions = [d.strip() for d in raw.split(";") if d.strip()]
+    gradient = query.get("gradient", [""])[0] or None
+    return color_keys(result, directions or ["x", "y", "z"], gradient=gradient)
 
 
 def _flag(query: dict, name: str, default: bool = False) -> bool:
@@ -170,6 +188,8 @@ class Handler(BaseHTTPRequestHandler):
             "/api/figure/ipfdensity": self._get_ipf_density,
             "/api/figure/flatmap": self._get_flat_map,
             "/api/export": self._get_export,
+            "/api/colormap": self._get_colormap,
+            "/api/diagnostics": self._get_diagnostics,
             "/api/atom": self._get_atom,
             "/api/slicebounds": self._get_slice_bounds,
         }
@@ -283,15 +303,15 @@ class Handler(BaseHTTPRequestHandler):
             result = self._result_or_409(query)
             options = self._view_options(query)
             transparent = _flag(query, "transparent")
-            with tempfile.NamedTemporaryFile(suffix=".png") as handle:
+            with temporary_path(".png") as scratch:
                 state.ovito.submit(
                     rendering.render_scene,
                     result,
-                    handle.name,
+                    scratch,
                     transparent=transparent,
                     **options,
                 ).result()
-                body = Path(handle.name).read_bytes()
+                body = Path(scratch).read_bytes()
         download = "ipf_view.png" if _flag(query, "download") else None
         self._send(body, "image/png", download=download)
 
@@ -382,10 +402,52 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 result = self._result_or_409()
                 stem = "ipf_colored"
-            with tempfile.NamedTemporaryFile(suffix=suffix) as handle:
-                write_result(result, handle.name, fmt)
-                body = Path(handle.name).read_bytes()
-        self._send(body, "application/octet-stream", download=stem + suffix)
+            keys, _, info = _export_keys(result, query)
+            with temporary_path(suffix) as scratch:
+                write_result(result, scratch, fmt, keys=keys)
+                body = Path(scratch).read_bytes()
+        headers = {}
+        if info:
+            headers["X-Color-Columns"] = ",".join(info["directions"])
+            headers["X-Color-Entries"] = str(info["entries"])
+        self._send(
+            body, "application/octet-stream", download=stem + suffix, extra_headers=headers
+        )
+
+    def _get_colormap(self, query):
+        """The colour bar the exported colour-coding columns index."""
+        from ..colormap import write_color_map
+
+        state = self.state
+        with state.lock:
+            result = self._result_or_409()
+            _, palette, info = _export_keys(result, query)
+            if palette is None:
+                raise ApiError(
+                    "a built-in OVITO colour bar was requested, so there is no "
+                    "custom colour map to download"
+                )
+            with temporary_path(".png") as scratch:
+                write_color_map(palette, scratch, height=16)
+                body = Path(scratch).read_bytes()
+        self._send(
+            body,
+            "image/png",
+            download="ipf_colormap.png",
+            extra_headers={
+                "X-Color-Entries": str(info["entries"]),
+                "X-Color-Error": f"{info['max_error']:.5f}",
+                "X-Color-Columns": ",".join(info["directions"]),
+            },
+        )
+
+    def _get_diagnostics(self, query):
+        """What this installation can and cannot do, for a first-run check.
+
+        The 3D view is rendered by OVITO on the server, so when it stays blank
+        the answer is almost always here rather than in the browser.
+        """
+        self._json(self.state.diagnostics())
 
     def _get_atom(self, query):
         index = int(_number(query, "index", -1))
@@ -408,6 +470,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/selection": self._post_selection,
             "/api/pick": self._post_pick,
             "/api/command": self._post_command,
+            "/api/command/parse": self._post_parse_command,
         }
         if url.path in routes:
             self._dispatch(routes[url.path])
@@ -455,14 +518,41 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"atom": state.atom_info(index)})
 
     def _post_command(self):
-        self._json({"command": build_command(self.state, self._body())})
+        """The equivalent command line, in both the wrapped and the one-line form.
+
+        The wrapped form is what belongs in a script; the one-line form is what
+        survives being pasted into a shell that does not honour backslash
+        continuations, PowerShell above all.  The explanatory note is kept out
+        of the one-line form, where a ``#`` would comment out everything after
+        it.
+        """
+        parts, note = build_command(self.state, self._body())
+        wrapped = " \\\n    ".join(parts)
+        self._json(
+            {
+                "command": wrapped + note,
+                "one_line": " ".join(parts),
+                "note": note.strip(),
+            }
+        )
+
+    def _post_parse_command(self):
+        """Turn a saved command line back into the settings the interface holds.
+
+        Parsing goes through the real ``ptmipf`` parser rather than a second
+        implementation here, so anything the CLI accepts can be imported and
+        the two can never drift apart.
+        """
+        self._json(parse_command(self._body().get("command", "")))
 
 
-def build_command(state: AppState, ui: dict) -> str:
+def build_command(state: AppState, ui: dict) -> tuple[list[str], str]:
     """The ``ptmipf`` command line reproducing the current session.
 
-    Options equal to the CLI defaults are omitted, so the command stays as
-    short as the one an experienced user would type.
+    Returns the argument list and an explanatory note, so the caller can join
+    them with continuations for a script or with spaces for a paste.  Options
+    equal to the CLI defaults are omitted, so the command stays as short as the
+    one an experienced user would type.
     """
     with state.lock:
         analysis = state.analysis_params
@@ -485,6 +575,18 @@ def build_command(state: AppState, ui: dict) -> str:
         if tuple(colour.get("other_color", DEFAULT_OTHER_COLOR)) != DEFAULT_OTHER_COLOR:
             parts.append("--other-color " + ",".join(f"{c:g}" for c in colour["other_color"]))
 
+        radius = ui.get("fill_radius")
+        if radius:
+            parts.append(f"--fill-boundaries {float(radius):g}")
+            neighbours = int(ui.get("fill_min_neighbours") or 3)
+            if neighbours != 3:
+                parts.append(f"--fill-min-neighbours {neighbours}")
+        directions = [str(d) for d in (ui.get("export_directions") or [])]
+        if directions != ["x", "y", "z"]:  # the CLI default, so worth no flags
+            for spec in directions:
+                parts.append(f"--export-direction {shlex.quote(spec)}")
+            if not directions:
+                parts.append("--no-export-directions")
         parts.append("-o ipf_colored.xyz")
         parts.append("--legend ipf_key.png")
         for pole in ui.get("poles") or []:
@@ -509,6 +611,10 @@ def build_command(state: AppState, ui: dict) -> str:
             parts.append(f"--slice {shlex.quote(str(ui['slice_axis']))}")
             if ui.get("slice_distance") is not None:
                 parts.append(f"--slice-distance {float(ui['slice_distance']):g}")
+            if ui.get("slice_width"):
+                parts.append(f"--slice-width {float(ui['slice_width']):g}")
+        if ui.get("view"):
+            parts.append(f"--view {shlex.quote(str(ui['view']))}")
         note = ""
         if state.selection_mask is not None:
             flags, exact = _selection_flags(state.selection_criteria, state.selection_mode)
@@ -522,7 +628,82 @@ def build_command(state: AppState, ui: dict) -> str:
                     "\n# or a quaternion reference) the CLI cannot express; see the"
                     "\n# selection options in `ptmipf --help` for the closest equivalent."
                 )
-        return " \\\n    ".join(parts) + note
+        return parts, note
+
+
+def parse_command(text: str) -> dict:
+    """Read a ``ptmipf`` command line back into the interface's settings.
+
+    Accepts what the command dialog offers: the wrapped form with its
+    backslash continuations, the one-line form, and either with or without the
+    leading program name.  Comment lines are dropped, so a command saved with
+    its explanatory note can be imported unchanged.
+    """
+    from ..cli import build_parser
+
+    cleaned = []
+    for line in (text or "").replace("\\\n", " ").splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            cleaned.append(stripped)
+    joined = " ".join(cleaned).strip()
+    if not joined:
+        raise ApiError("paste a ptmipf command line first")
+    try:
+        tokens = shlex.split(joined)
+    except ValueError as exc:
+        raise ApiError(f"cannot read the command: {exc}") from None
+    if tokens and Path(tokens[0]).stem in ("ptmipf", "ptmipf-ui", "cli"):
+        tokens = tokens[1:]
+    if tokens and tokens[0] in ("-m", "python", "python3"):
+        raise ApiError(
+            "paste the ptmipf command itself, without the python interpreter in front"
+        )
+
+    parser = build_parser()
+    # argparse exits the process on a bad command line; a pasted one is data.
+    def _fail(message):
+        raise ApiError(f"cannot read the command: {message}")
+
+    parser.error = _fail  # type: ignore[method-assign]
+    try:
+        args = parser.parse_args(tokens)
+    except SystemExit:
+        raise ApiError("cannot read the command; check it against `ptmipf --help`") from None
+
+    axes = {name: getattr(args, name) for name in ("rd", "td", "nd", "ed")}
+    return {
+        "analysis": {
+            "path": args.input or "",
+            "structures": [s for s in (args.structures or "").split(",") if s],
+            "rmsd_cutoff": args.rmsd_cutoff,
+            "frame_index": args.frame,
+        },
+        "colour": {
+            "direction": args.direction,
+            "axes": {k: v for k, v in axes.items() if v},
+            "color_only": [s for s in (args.color_only or "").split(",") if s],
+            "other_color": args.other_color,
+        },
+        "ui": {
+            "poles": list(args.pole_figures),
+            "pole_mode": args.pole_figure_mode,
+            "pole_structure": args.pole_figure_structure or "",
+            "c_over_a": args.c_over_a,
+            "hide_other": bool(args.hide_other),
+            "slice_axis": args.slice_normal or "",
+            "slice_width": args.slice_width,
+            "view": args.view or "",
+            "fill_radius": args.fill_boundaries,
+            "fill_min_neighbours": args.fill_min_neighbours,
+            "export_directions": list(args.export_direction or []),
+            "flat_map": {
+                "pixel_size": args.pixel_size,
+                "slab_width": args.slice_width or None,
+                "view": args.view or "",
+            },
+        },
+    }
 
 
 def _selection_flags(criteria: list, mode: str) -> tuple[list[str], bool]:
@@ -585,6 +766,29 @@ def _selection_flags(criteria: list, mode: str) -> tuple[list[str], bool]:
     return flags, exact
 
 
+def _print_diagnostics() -> int:
+    """``ptmipf-ui --check``: the same probe the interface runs, on the terminal."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from .state import _probe_environment
+
+    report = _probe_environment()
+    print(f"ptm-ipf {report['ptmipf']} on Python {report['python']}, {report['platform']}")
+    for check in report["checks"]:
+        mark = "ok  " if check["ok"] else "FAIL"
+        detail = f"  {check['detail']}" if check["detail"] else ""
+        print(f"  [{mark}] {check['name']}{detail}")
+    if report["ok"]:
+        print("The 3D view will work here.")
+        return 0
+    print(
+        "The interface will start, but the 3D view will stay empty.  The plots, the "
+        "flat orientation map and the exports do not need a renderer and still work."
+    )
+    return 1
+
+
 def make_server(root, host: str = "127.0.0.1", port: int = 0, initial_path: str = ""):
     """Build (but do not start) the HTTP server; used by ``main`` and the tests."""
     import matplotlib
@@ -614,8 +818,16 @@ def main(argv=None) -> int:
     parser.add_argument("--host", default="127.0.0.1", help="bind address (default: %(default)s)")
     parser.add_argument("--port", type=int, default=8465, help="port (default: %(default)s)")
     parser.add_argument("--no-browser", action="store_true", help="do not open a browser tab")
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="report whether this installation can render the 3D view, then exit",
+    )
     parser.add_argument("-v", "--verbose", action="store_true", help="log every request")
     args = parser.parse_args(argv)
+
+    if args.check:
+        return _print_diagnostics()
 
     root = args.root
     initial = ""

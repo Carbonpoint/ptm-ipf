@@ -133,6 +133,21 @@
       <button class="small" data-export="extxyz" data-selection="1">selection .xyz</button>
       <button class="small" data-export="lammps-dump" data-selection="1">selection .dump</button>
     </div>
+    <label>Colour-coding columns
+      <input id="export-directions" type="text" value="x; y; z" spellcheck="false"
+        title="semicolon-separated directions; each becomes one scalar column">
+    </label>
+    <p class="muted note">
+      The file carries <code>Color.R/G/B</code> for the direction shown above, so it
+      opens already coloured. Each listed direction also gets a scalar column, so the
+      other IPF maps can be reached inside OVITO with no re-export: add
+      <em>Color coding</em>, set the input property to <code>ipf_x</code>,
+      <code>ipf_y</code> or <code>ipf_z</code>, the range to 0 and 1, and the colour
+      gradient to <em>Load custom color map</em> with the file below.
+    </p>
+    <div class="row wrap">
+      <a id="download-colormap" class="small button" download>colour map .png</a>
+    </div>
   </details>
 
 </aside>
@@ -163,6 +178,7 @@
       <img id="view" alt="IPF-coloured atoms" draggable="false">
       <div id="view-placeholder" class="placeholder">Analyse a configuration to see the IPF map.
         Drag to orbit, scroll to zoom, click an atom for details.</div>
+      <div id="view-error" class="view-error" hidden></div>
       <div id="atom-info" class="atom-info" hidden></div>
     </div>
   </section>
@@ -232,10 +248,33 @@
 <dialog id="cmd-dialog">
   <h2>Equivalent command line</h2>
   <pre id="cmd-text"></pre>
-  <span class="row">
+  <p id="cmd-note" class="muted note" hidden></p>
+  <span class="row wrap">
     <button id="cmd-copy" class="primary small">Copy</button>
+    <button id="cmd-copy-line" class="small"
+      title="One line, no backslash continuations, which is what PowerShell and the
+Windows command prompt need">Copy as one line</button>
+    <button id="cmd-save" class="small" title="Save the command to a file">Save</button>
     <button id="cmd-close" class="small">Close</button>
   </span>
+  <details id="cmd-import">
+    <summary>Resume from a saved command</summary>
+    <p class="muted note">Load or paste a command written by this dialog, or any
+    <code>ptmipf</code> command line, and the whole form is set from it. Either form
+    works, wrapped or on one line.</p>
+    <span class="row wrap">
+      <button id="cmd-load" class="small">Load a file…</button>
+      <input id="cmd-file" type="file" accept=".txt,.sh,.ps1,.cmd,.bat,text/plain" hidden>
+    </span>
+    <textarea id="cmd-input" rows="4" spellcheck="false"
+      placeholder="ptmipf mg.dump --structures hcp --direction nd ..."></textarea>
+    <span class="row wrap">
+      <button id="cmd-apply" class="primary small">Apply to the form</button>
+      <label class="inline"><input id="cmd-apply-run" type="checkbox" checked>
+        and analyse</label>
+      <span id="cmd-import-status" class="muted"></span>
+    </span>
+  </details>
 </dialog>
 
 <script src="/static/app.js"></script>

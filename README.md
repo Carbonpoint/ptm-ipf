@@ -60,11 +60,56 @@ On a bare Linux machine OVITO also needs the OpenGL runtime:
 `ln -s /usr/lib/x86_64-linux-gnu/libGL.so.1 <somewhere>/libOpenGL.so.0` and run with
 `LD_LIBRARY_PATH=<somewhere>`.
 
-For development:
+### Windows
+
+Windows PowerShell has no `&&`, so the one-line form above fails there. Run the steps
+as separate lines instead:
+
+```powershell
+uv venv
+uv pip install git+https://github.com/Carbonpoint/ptm-ipf.git
+.venv\Scripts\ptmipf-ui.exe --check
+```
+
+The last line is a self test: it reports whether OVITO imported and whether the 3D
+view can be drawn, and names what is missing if not. Then:
+
+```powershell
+.venv\Scripts\ptmipf.exe mg.dump --structures hcp --direction z --legend key.png
+.venv\Scripts\ptmipf-ui.exe mg.dump
+```
+
+Calling the executables in `.venv\Scripts` directly avoids activating the environment,
+which PowerShell refuses to do under its default execution policy. To activate anyway,
+run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` and then
+`.venv\Scripts\Activate.ps1`.
+
+In `cmd.exe` the chained form does work:
+
+```bat
+uv venv && uv pip install git+https://github.com/Carbonpoint/ptm-ipf.git
+```
+
+Two Windows specifics. `git+https://...` needs Git for Windows on the PATH
+(`winget install Git.Git`); without it, download the repository as a ZIP and run
+`uv pip install .` in the unpacked folder. And OVITO's Windows wheels carry their own
+graphics stack, so there is no OpenGL step to do by hand.
+
+### For development
 
 ```bash
 git clone https://github.com/Carbonpoint/ptm-ipf.git && cd ptm-ipf
 uv venv && uv pip install -e ".[test]" && uv run --no-project pytest -q
+```
+
+On Windows, again one step per line:
+
+```powershell
+git clone https://github.com/Carbonpoint/ptm-ipf.git
+cd ptm-ipf
+uv venv
+uv pip install -e ".[test]"
+uv run --no-project pytest -q
 ```
 
 ## Quick start
@@ -82,6 +127,50 @@ coloured by orientation, with no column mapping to do by hand. To render the pic
 ptmipf mg.dump --structures hcp --direction nd \
     --render mg_map.png --hide-other --slice nd --render-size 1600x1200
 ```
+
+### Three IPF maps in one file, recoloured inside OVITO
+
+`Color.R/G/B` fixes one projection direction at export time, and OVITO's own Color
+coding modifier cannot read a colour triple: it maps *one scalar per atom* through a
+colour bar. So every output file also carries a scalar column per direction, `ipf_x`,
+`ipf_y` and `ipf_z` by default, and a colour bar that turns them back into exactly the
+IPF colours:
+
+```bash
+ptmipf mg.dump --structures hcp -o mg_ipf.dump
+# wrote mg_ipf.dump (lammps-dump)
+# colour-coding columns: ipf_x (X), ipf_y (Y), ipf_z (Z)
+# wrote mg_ipf_colormap.png (18422 colours, worst colour error 0.0019)
+```
+
+In OVITO, on the loaded file:
+
+1. add a **Color coding** modifier,
+2. set **Input property** to `ipf_x`, `ipf_y` or `ipf_z`,
+3. set the range to **0** and **1** (not "Adjust range"),
+4. open the colour gradient list, choose **Load custom color map**, and pick
+   `mg_ipf_colormap.png`.
+
+Switching the input property between the three columns now switches between IPF-X,
+IPF-Y and IPF-Z with no re-export. The colours are the same ones the colour key and the
+pole figures use, to within the 8-bit depth of the file, which
+`tests/test_colormap.py` checks by running the modifier and comparing.
+
+Pick your own directions with `--export-direction`, repeated:
+
+```bash
+ptmipf mg.dump --structures hcp --nd 0,0,1 --rd 1,0,0 -o mg_ipf.dump \
+    --export-direction rd --export-direction td --export-direction nd
+```
+
+`--no-export-directions` writes the plain file with `Color.R/G/B` only.
+
+A stock colour bar can stand in for the custom one with
+`--color-map-gradient jet` (or `rainbow`, `viridis`, ...), which needs no extra file.
+It is an approximation and is reported as one: a built-in bar is a one-dimensional curve
+through colour space while the IPF colours cover a two-dimensional patch of it, so most
+IPF colours simply are not on the curve. For a full IPF map the error is large enough to
+change which grain looks like which, so it is worth the extra file to load the custom map.
 
 ### Sections
 

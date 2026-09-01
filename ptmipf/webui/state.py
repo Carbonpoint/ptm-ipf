@@ -114,6 +114,7 @@ class AppState:
         self.selection_mode: str = "and"
         self.generation = 0  # bumped on every visible change, used for cache busting
         self._fill_cache: tuple | None = None  # (radius, min_neighbours, generation)
+        self._diagnostics: dict | None = None  # probed once, on first request
 
     # ------------------------------------------------------------------
     # paths
@@ -380,3 +381,120 @@ class AppState:
                 "orientation": [round(float(c), 6) for c in result.orientations[index]],
                 "color": [round(float(c), 4) for c in result.colors[index]],
             }
+
+    # ------------------------------------------------------------------
+    # first-run diagnostics
+    # ------------------------------------------------------------------
+    def diagnostics(self) -> dict:
+        """Probe everything the interface needs, and say what is missing.
+
+        The 3D view is drawn by OVITO in this process and arrives in the
+        browser as a PNG, so a blank viewer is almost always a server-side
+        renderer problem rather than a browser one.  The probe runs on the
+        OVITO worker thread, like every other OVITO call, and caches its
+        verdict: building a scene costs little but is not free.
+        """
+        with self.lock:
+            if self._diagnostics is None:
+                self._diagnostics = self.ovito.submit(_probe_environment).result()
+            probe = dict(self._diagnostics)
+        probe["root"] = str(self.root)
+        return probe
+
+
+def _probe_environment() -> dict:
+    """Import and render probes.
+
+    Inside the server this runs on the OVITO worker thread, like every other
+    OVITO call; ``ptmipf-ui --check`` calls it on the main thread instead,
+    because a one-shot check has no HTTP threads to protect and OVITO crashes
+    at interpreter shutdown if its objects outlive the thread that made them.
+    """
+    import platform
+    import sys
+
+    import numpy as np
+
+    from .. import __version__
+    from ..io import temporary_path
+
+    report = {
+        "ptmipf": __version__,
+        "python": sys.version.split()[0],
+        "platform": f"{platform.system()} {platform.release()}",
+        "checks": [],
+        "renderer": None,
+        "ok": True,
+    }
+
+    def record(name: str, ok: bool, detail: str = "", fatal: bool = False):
+        report["checks"].append({"name": name, "ok": bool(ok), "detail": detail})
+        if fatal and not ok:
+            report["ok"] = False
+
+    try:
+        import ovito
+
+        record("ovito", True, f"version {ovito.version_string}")
+    except Exception as exc:  # the interface cannot do anything without it
+        record("ovito", False, _explain_ovito(exc), fatal=True)
+        return report
+
+    for name, module in (("matplotlib", "matplotlib"), ("pillow", "PIL"), ("scipy", "scipy")):
+        try:
+            __import__(module)
+            record(name, True)
+        except Exception as exc:
+            record(name, False, str(exc), fatal=name != "scipy")
+
+    try:
+        from .. import select  # noqa: F401
+
+        record("selection", True)
+    except Exception as exc:
+        record("selection", False, str(exc))
+
+    from ..frames import SampleFrame
+    from ..structures import get_structure
+
+    class _Probe:
+        positions = np.array([[0.0, 0.0, 0.0], [2.5, 0.0, 0.0]])
+        colors = np.array([[1.0, 0.0, 0.0], [0.0, 0.4, 1.0]])
+        structure_types = np.array([1, 1])
+        rmsd = np.zeros(2)
+        n_atoms = 2
+        frame = SampleFrame()
+        structures = (get_structure("fcc"),)
+        type_codes = {"fcc": 1}
+        cell = None
+
+    from . import rendering
+
+    errors = []
+    for engine in ("opengl", "tachyon"):
+        try:
+            with temporary_path(".png") as scratch:
+                rendering.render_scene(_Probe(), scratch, size=(48, 48), engine=engine)
+                size = Path(scratch).stat().st_size
+            if size == 0:
+                raise RuntimeError("the renderer wrote an empty file")
+            report["renderer"] = engine
+            record("3D view", True, f"rendered with the {engine} renderer")
+            break
+        except Exception as exc:
+            errors.append(f"{engine}: {exc}")
+    else:
+        record("3D view", False, "; ".join(errors) or "no renderer worked", fatal=True)
+    return report
+
+
+def _explain_ovito(exc: Exception) -> str:
+    """Turn the usual OVITO import failures into the fix for them."""
+    text = str(exc)
+    if "libOpenGL" in text or "libEGL" in text:
+        return (
+            f"{text}. On Linux install the OpenGL runtime "
+            "(sudo apt install libopengl0 libegl1), or symlink libGL.so.1 to "
+            "libOpenGL.so.0 in a directory on LD_LIBRARY_PATH."
+        )
+    return text

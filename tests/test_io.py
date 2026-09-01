@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -85,3 +87,46 @@ def test_extxyz_colours_bind_to_atoms_in_ovito(tmp_path):
 def test_unknown_format_is_rejected(tmp_path):
     with pytest.raises(ValueError):
         write_result(FakeResult(), tmp_path / "out.foo", fmt="cif")
+
+
+def test_extxyz_carries_the_colour_coding_columns(tmp_path):
+    path = tmp_path / "keys.xyz"
+    keys = {"ipf_x": np.array([0.125, 0.875]), "ipf_z": np.array([0.375, 0.625])}
+    write_result(FakeResult(), path, keys=keys)
+    lines = path.read_text().splitlines()
+    assert ":color:R:3:ipf_x:R:1:ipf_z:R:1" in lines[1]
+    first = lines[2].split()
+    assert len(first) == 11
+    assert float(first[9]) == pytest.approx(0.125)
+    assert float(first[10]) == pytest.approx(0.375)
+
+
+def test_dump_names_the_colour_coding_columns(tmp_path):
+    path = tmp_path / "keys.dump"
+    write_result(FakeResult(), path, keys={"ipf_y": np.array([0.25, 0.75])})
+    text = path.read_text()
+    assert "ITEM: ATOMS id type x y z StructureType rmsd Color.R Color.G Color.B ipf_y" in text
+    assert text.strip().splitlines()[-1].split()[-1] == "0.75000000"
+
+
+def test_a_key_of_the_wrong_length_is_refused(tmp_path):
+    with pytest.raises(ValueError, match="expected 2"):
+        write_result(FakeResult(), tmp_path / "bad.xyz", keys={"ipf_x": np.zeros(3)})
+
+
+def test_temporary_path_can_be_written_by_name():
+    """The web UI hands this path to OVITO, which opens it itself.
+
+    NamedTemporaryFile cannot serve that purpose: on Windows its open handle
+    locks the name and the second open fails, which is what left the 3D view
+    and the exports empty there.
+    """
+    from ptmipf.io import temporary_path
+
+    with temporary_path(".png") as path:
+        assert path.endswith(".png")
+        with open(path, "w") as handle:
+            handle.write("written by name")
+        with open(path) as handle:
+            assert handle.read() == "written by name"
+    assert not Path(path).exists()

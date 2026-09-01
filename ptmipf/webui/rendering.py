@@ -109,10 +109,14 @@ def render_scene(
     transparent: bool = False,
     radius: float | None = None,
     tripod: bool = False,
+    engine: str = "auto",
 ) -> str:
     """Render *result* to a PNG file and return the filename.
 
     Must run on the dedicated OVITO worker thread (see ``state.AppState``).
+    *engine* is ``opengl``, ``tachyon`` or ``auto``, which tries OpenGL first
+    and falls back; the diagnostics probe names one so it can report which
+    renderer actually works here.
     """
     from ovito.data import DataCollection, Particles, SimulationCell
     from ovito.pipeline import Pipeline, StaticSource
@@ -160,21 +164,7 @@ def render_scene(
             from ..render import _tripod_overlay
 
             viewport.overlays.append(_tripod_overlay(result.frame))
-        try:
-            engine = _opengl_renderer()
-            viewport.render_image(
-                filename=str(filename), size=tuple(size), renderer=engine, alpha=transparent
-            )
-        except Exception:
-            # Tachyon is slower but needs no GL stack at all.
-            from ovito.vis import TachyonRenderer
-
-            viewport.render_image(
-                filename=str(filename),
-                size=tuple(size),
-                renderer=TachyonRenderer(),
-                alpha=transparent,
-            )
+        _render_with(viewport, filename, size, transparent, engine)
     finally:
         pipeline.remove_from_scene()
     return str(filename)
@@ -184,10 +174,39 @@ def _fov(scene_radius: float, zoom: float) -> float:
     return scene_radius * 1.05 / max(float(zoom), 1e-3)
 
 
-def _opengl_renderer():
-    from ovito.vis import OpenGLRenderer
+def _render_with(viewport, filename, size, transparent: bool, engine: str) -> None:
+    """Draw the viewport, falling back from OpenGL to Tachyon.
 
-    return OpenGLRenderer()
+    Both failures are kept and re-raised together: a machine with no GL stack
+    and a machine whose OVITO build has no Tachyon fail in completely
+    different ways, and the web UI can only say which when it has both
+    messages.
+    """
+    from ovito import vis
+
+    engines = {
+        "opengl": vis.OpenGLRenderer,
+        # Slower, but needs no GL stack at all.
+        "tachyon": getattr(vis, "TachyonRenderer", None),
+    }
+    order = ("opengl", "tachyon") if engine == "auto" else (engine,)
+    failures = []
+    for name in order:
+        factory = engines.get(name)
+        if factory is None:
+            failures.append(f"{name}: this OVITO build has no {name} renderer")
+            continue
+        try:
+            viewport.render_image(
+                filename=str(filename),
+                size=tuple(size),
+                renderer=factory(),
+                alpha=transparent,
+            )
+            return
+        except Exception as exc:
+            failures.append(f"{name}: {exc}")
+    raise RuntimeError("no OVITO renderer worked here: " + "; ".join(failures))
 
 
 def pick_atom(

@@ -18,6 +18,7 @@ const state = {
   selectionCount: null,
   criteria: [],
   atomInfo: null,
+  command: null,       // last /api/command payload, for the one-line copy
 };
 
 /* ------------------------------------------------------------------ */
@@ -32,6 +33,13 @@ async function api(path, options) {
 const postJSON = (path, body) =>
   api(path, { method: "POST", headers: { "Content-Type": "application/json" },
               body: JSON.stringify(body) });
+
+// A failed image request may carry a JSON error, or nothing readable at all if
+// the server died mid-request; either way the caller needs a sentence.
+async function errorMessage(response) {
+  const payload = await response.json().catch(() => ({}));
+  return payload.error || `the server answered ${response.status} ${response.statusText}`;
+}
 
 function debounce(fn, ms) {
   let timer;
@@ -82,6 +90,7 @@ function colourParams() {
 }
 
 function uiOptions() {
+  const sliced = $("slice-on").checked && $("slice-axis").value.trim();
   return {
     poles: $("poles").value.split(",").map((p) => p.trim()).filter(Boolean),
     pole_mode: $("pole-mode").value,
@@ -89,8 +98,17 @@ function uiOptions() {
     c_over_a: parseFloat($("c-over-a").value) || null,
     render_size: viewSize(),
     hide_other: $("hide-other").checked,
-    slice_axis: $("slice-on").checked ? $("slice-axis").value.trim() : null,
+    slice_axis: sliced ? $("slice-axis").value.trim() : null,
+    slice_width: sliced ? parseFloat($("slice-width").value) || null : null,
+    fill_radius: $("fill-on").checked ? parseFloat($("fill-radius").value) || 6 : null,
+    fill_min_neighbours: parseInt($("fill-min").value, 10) || 3,
+    export_directions: exportDirections(),
   };
+}
+
+// Semicolons, not commas: a direction may itself be a vector such as 1,1,0.
+function exportDirections() {
+  return $("export-directions").value.split(";").map((d) => d.trim()).filter(Boolean);
 }
 
 /* ------------------------------------------------------------------ */
@@ -149,6 +167,7 @@ function applyStatus(status) {
   $("cmd-button").disabled = false;
   if (status.generation !== state.generation) {
     state.generation = status.generation;
+    updateColorMapLink();
     refreshAll();
   }
   setStatus(`${status.result.n_atoms.toLocaleString()} atoms · IPF ` +
@@ -251,7 +270,7 @@ async function refreshFlatMap() {
   info.textContent = "drawing...";
   try {
     const response = await fetch("/api/figure/flatmap?" + flatMapQuery());
-    if (!response.ok) throw new Error((await response.json()).error || "flat map failed");
+    if (!response.ok) throw new Error(await errorMessage(response));
     const grains = response.headers.get("X-Grain-Count");
     const size = response.headers.get("X-Map-Size");
     const blob = await response.blob();
@@ -272,7 +291,7 @@ async function refreshView() {
   renderInFlight = true;
   try {
     const response = await fetch("/api/render?" + viewQuery());
-    if (!response.ok) throw new Error((await response.json()).error || "render failed");
+    if (!response.ok) throw new Error(await errorMessage(response));
     const blob = await response.blob();
     const img = $("view");
     const old = img.src;
@@ -281,12 +300,37 @@ async function refreshView() {
     $("view-placeholder").hidden = true;
     if (old.startsWith("blob:")) URL.revokeObjectURL(old);
     $("download-view").href = "/api/render?" + viewQuery({ download: 1 });
+    showViewError(null);
   } catch (error) {
-    setStatus(error.message, "error");
+    setStatus("the 3D view failed", "error");
+    showViewError(error.message);
   } finally {
     renderInFlight = false;
     if (renderQueued) { renderQueued = false; refreshView(); }
   }
+}
+
+/* The 3D view is drawn by OVITO on the server and arrives as a PNG, so a
+ * failure here is a server-side renderer problem and the browser has nothing
+ * to show for it.  Saying so in the empty frame beats a broken image. */
+function showViewError(message) {
+  const box = $("view-error");
+  if (!message) { box.hidden = true; return; }
+  // A stale image beside the explanation reads as if the view still worked.
+  $("view").classList.remove("live");
+  box.replaceChildren();
+  const title = document.createElement("strong");
+  title.textContent = "The 3D view could not be drawn.";
+  const detail = document.createElement("p");
+  detail.textContent = message;
+  const hint = document.createElement("p");
+  hint.className = "muted";
+  hint.textContent = "Run  ptmipf-ui --check  in the same environment to see what is " +
+    "missing. The plots, the flat orientation map and the exports do not need a " +
+    "renderer and still work.";
+  box.append(title, detail, hint);
+  box.hidden = false;
+  $("view-placeholder").hidden = true;
 }
 
 function bindViewer() {
@@ -686,6 +730,172 @@ const debouncedColour = debounce(() => runAnalysis(false), 400);
 const debouncedView = debounce(refreshView, 250);
 const debouncedFigures = debounce(refreshFigures, 400);
 
+/* ------------------------------------------------------------------ */
+/* the command line: copy, save, and read one back                     */
+/* ------------------------------------------------------------------ */
+function updateColorMapLink() {
+  const link = $("download-colormap");
+  // Without a result the endpoint has nothing to build a palette from, so the
+  // link stays inert rather than downloading an error.
+  if (state.generation < 0) { link.removeAttribute("href"); return; }
+  const params = new URLSearchParams({
+    directions: exportDirections().join(";"),
+    gen: state.generation,
+  });
+  link.href = "/api/colormap?" + params;
+}
+
+function bindCommandDialog() {
+  const dialog = $("cmd-dialog");
+
+  $("cmd-button").addEventListener("click", async () => {
+    try {
+      const outcome = await postJSON("/api/command", uiOptions());
+      state.command = outcome;
+      $("cmd-text").textContent = outcome.command;
+      $("cmd-note").textContent = outcome.note || "";
+      $("cmd-note").hidden = !outcome.note;
+      $("cmd-import-status").textContent = "";
+      dialog.showModal();
+    } catch (error) { setStatus(error.message, "error"); }
+  });
+
+  $("cmd-copy").addEventListener("click", () => copyCommand($("cmd-text").textContent));
+  // Backslash continuations are a POSIX shell convention.  PowerShell and the
+  // Windows command prompt break the command at the first line end instead, so
+  // the pasted command has to be one line there.
+  $("cmd-copy-line").addEventListener("click", () =>
+    copyCommand((state.command && state.command.one_line) || $("cmd-text").textContent));
+
+  $("cmd-save").addEventListener("click", () => {
+    const text = $("cmd-text").textContent + "\n";
+    const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "ptmipf-command.txt";
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+
+  $("cmd-load").addEventListener("click", () => $("cmd-file").click());
+  $("cmd-file").addEventListener("change", async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    $("cmd-input").value = await file.text();
+    event.target.value = "";
+    $("cmd-import").open = true;
+  });
+
+  $("cmd-apply").addEventListener("click", async () => {
+    const note = $("cmd-import-status");
+    try {
+      const settings = await postJSON("/api/command/parse",
+                                      { command: $("cmd-input").value });
+      applySettings(settings);
+      note.textContent = "applied";
+      note.className = "muted";
+      dialog.close();
+      if ($("cmd-apply-run").checked && $("path").value.trim()) runAnalysis(true);
+    } catch (error) {
+      note.textContent = error.message;
+      note.className = "error-text";
+    }
+  });
+
+  $("cmd-close").addEventListener("click", () => dialog.close());
+}
+
+/* The renderer lives on the server, so ask it once whether there is one rather
+ * than letting the first orbit come back as a broken image. */
+async function checkEnvironment() {
+  try {
+    const report = await api("/api/diagnostics");
+    if (report.ok) return;
+    showViewError(report.checks.filter((check) => !check.ok)
+      .map((check) => `${check.name}: ${check.detail || "not available"}`).join("\n"));
+  } catch (error) {
+    // The panel is a courtesy; a failed probe must never block the interface.
+  }
+}
+
+async function copyCommand(text) {
+  const note = $("cmd-import-status");
+  try {
+    await navigator.clipboard.writeText(text);
+    note.textContent = "copied";
+    note.className = "muted";
+  } catch (error) {
+    // A page served over plain http has no clipboard API in some browsers;
+    // selecting the text is the honest fallback.
+    const range = document.createRange();
+    range.selectNodeContents($("cmd-text"));
+    const selection = getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    note.textContent = "the browser blocked the clipboard; the command is selected, " +
+      "press Ctrl-C";
+    note.className = "error-text";
+  }
+}
+
+/* Set the whole form from a parsed command line, so a session can be resumed
+ * from the command that produced it. */
+function applySettings(settings) {
+  const analysis = settings.analysis || {};
+  const colour = settings.colour || {};
+  const ui = settings.ui || {};
+
+  if (analysis.path) $("path").value = analysis.path;
+  if (analysis.rmsd_cutoff !== null && analysis.rmsd_cutoff !== undefined) {
+    $("rmsd").value = analysis.rmsd_cutoff;
+  }
+  $("frame-index").value = analysis.frame_index || 0;
+  setChecks("#structures input", analysis.structures);
+  setChecks("#color-only input",
+            (colour.color_only && colour.color_only.length) ? colour.color_only : null);
+
+  for (const name of ["rd", "td", "nd", "ed"]) {
+    $("axis-" + name).value = (colour.axes && colour.axes[name]) || "";
+  }
+  if (colour.direction) $("direction").value = colour.direction;
+  if (colour.other_color) {
+    const parts = String(colour.other_color).split(",").map(Number);
+    if (parts.length === 3 && parts.every((v) => Number.isFinite(v))) {
+      $("other-color").value = rgbToHex(parts);
+    }
+  }
+
+  $("fill-on").checked = Boolean(ui.fill_radius);
+  if (ui.fill_radius) $("fill-radius").value = ui.fill_radius;
+  if (ui.fill_min_neighbours) $("fill-min").value = ui.fill_min_neighbours;
+
+  if (ui.poles && ui.poles.length) $("poles").value = ui.poles.join(",");
+  if (ui.pole_mode) $("pole-mode").value = ui.pole_mode;
+  if (ui.c_over_a) $("c-over-a").value = ui.c_over_a;
+
+  $("hide-other").checked = Boolean(ui.hide_other);
+  $("slice-on").checked = Boolean(ui.slice_axis);
+  if (ui.slice_axis) $("slice-axis").value = ui.slice_axis;
+  if (ui.slice_width) $("slice-width").value = ui.slice_width;
+  if (ui.export_directions && ui.export_directions.length) {
+    $("export-directions").value = ui.export_directions.join("; ");
+    updateColorMapLink();
+  }
+  if (ui.view) {
+    $("flat-view").value = ui.view;
+    const axis = { x: [0, 0], y: [90, 0], z: [-90, 89.9] }[ui.view.trim().toLowerCase()];
+    if (axis) { state.camera.az = axis[0]; state.camera.el = axis[1]; }
+  }
+}
+
+function setChecks(selector, wanted) {
+  if (!wanted) return;
+  const names = new Set(wanted);
+  for (const input of document.querySelectorAll(selector)) {
+    input.checked = names.has(input.value);
+  }
+}
+
 async function init() {
   state.meta = await api("/api/meta");
   $("version").textContent = "v" + state.meta.version;
@@ -755,21 +965,18 @@ async function init() {
 
   for (const button of document.querySelectorAll("[data-export]")) {
     button.addEventListener("click", () => {
-      window.location = "/api/export?format=" + button.dataset.export +
-        "&selection=" + button.dataset.selection;
+      const params = new URLSearchParams({
+        format: button.dataset.export,
+        selection: button.dataset.selection,
+        directions: exportDirections().join(";"),
+      });
+      window.location = "/api/export?" + params;
     });
   }
+  $("export-directions").addEventListener("change", updateColorMapLink);
+  updateColorMapLink();
 
-  $("cmd-button").addEventListener("click", async () => {
-    try {
-      const outcome = await postJSON("/api/command", uiOptions());
-      $("cmd-text").textContent = outcome.command;
-      $("cmd-dialog").showModal();
-    } catch (error) { setStatus(error.message, "error"); }
-  });
-  $("cmd-copy").addEventListener("click", () =>
-    navigator.clipboard.writeText($("cmd-text").textContent));
-  $("cmd-close").addEventListener("click", () => $("cmd-dialog").close());
+  bindCommandDialog();
 
   $("theme-toggle").addEventListener("click", () => {
     const root = document.documentElement;
@@ -783,6 +990,7 @@ async function init() {
   if (savedTheme) document.documentElement.dataset.theme = savedTheme;
 
   updateSelectionCount();
+  checkEnvironment();
   // Pick up an analysis that survived a page reload.
   const status = await api("/api/status");
   if (status.state === "running") { state.running = true; pollUntilDone(); }

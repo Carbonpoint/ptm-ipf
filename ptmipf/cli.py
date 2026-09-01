@@ -66,6 +66,33 @@ def build_parser() -> argparse.ArgumentParser:
         "-o", "--output", help="write the coloured configuration here (.xyz or .dump)"
     )
     parser.add_argument("--format", help="force the output format (extxyz or lammps-dump)")
+    parser.add_argument(
+        "--export-direction",
+        metavar="DIR",
+        action="append",
+        help="also write a scalar colour-coding column for this direction, so OVITO's "
+        "own Color coding modifier can repaint the atoms along it.  Repeatable; "
+        "accepts anything --direction does.  Default: x, y and z",
+    )
+    parser.add_argument(
+        "--no-export-directions",
+        action="store_true",
+        help="write no colour-coding columns, only Color.R/G/B for --direction",
+    )
+    parser.add_argument(
+        "--color-map",
+        metavar="PNG",
+        help="where to write the colour bar the colour-coding columns index "
+        "(default: <output>_colormap.png)",
+    )
+    parser.add_argument(
+        "--color-map-gradient",
+        metavar="NAME",
+        help="index one of OVITO's built-in colour bars (jet, rainbow, viridis, ...) "
+        "instead of writing an exact one.  A built-in bar is a curve through colour "
+        "space and the IPF colours are a surface in it, so this only approximates "
+        "them; the error is reported",
+    )
     parser.add_argument("--version", action="version", version=f"ptm-ipf {__version__}")
     parser.add_argument(
         "--list-structures", action="store_true", help="list the supported structures and exit"
@@ -429,6 +456,53 @@ def _optional_float(text: str, option: str):
         raise SystemExit(f"{option}: {text!r} is not a number") from None
 
 
+def _color_keys(args, result):
+    """Scalar colour-coding columns for the requested export directions.
+
+    Returns ``(keys, palette, info)``; ``keys`` is empty when the columns are
+    switched off, which keeps the writers on their original output.
+    """
+    if args.no_export_directions:
+        return {}, None, None
+    directions = args.export_direction or ["x", "y", "z"]
+    from .colormap import color_keys
+
+    return color_keys(result, directions, gradient=args.color_map_gradient)
+
+
+def _report_color_keys(args, keys, palette, info, output, quiet: bool) -> None:
+    """Write the colour bar beside the output and say how to use it."""
+    if not keys or info is None:
+        return
+    columns = ", ".join(f"{name} ({label})" for name, label in info["directions"].items())
+    if palette is None:
+        if not quiet:
+            print(
+                f"colour-coding columns: {columns}\n"
+                f"  load them with Color coding and OVITO's built-in "
+                f"{info['gradient']} colour bar, range 0 to 1\n"
+                f"  approximation error: {info['mean_error']:.3f} mean, "
+                f"{info['max_error']:.3f} worst (RGB units of 1)"
+            )
+        return
+
+    from pathlib import Path
+
+    from .colormap import write_color_map
+
+    target = args.color_map or str(Path(output).with_suffix("")) + "_colormap.png"
+    write_color_map(palette, target)
+    if not quiet:
+        print(
+            f"colour-coding columns: {columns}\n"
+            f"wrote {target} ({info['entries']} colours, "
+            f"worst colour error {info['max_error']:.4f})\n"
+            "  in OVITO: Color coding, input property one of the columns above, "
+            "range 0 to 1,\n"
+            "  colour gradient 'Load custom color map' and pick that PNG"
+        )
+
+
 def _build_selection(args, result, structures, coloured):
     """Turn the --select-* options into one boolean mask, or None."""
     from . import select as selection
@@ -611,7 +685,10 @@ def main(argv=None) -> int:
         if args.selection_output:
             from .io import write_result
 
-            fmt = write_result(selected, args.selection_output, args.format)
+            selection_keys, _, _ = _color_keys(args, selected)
+            fmt = write_result(
+                selected, args.selection_output, args.format, keys=selection_keys
+            )
             if not args.quiet:
                 print(f"wrote {args.selection_output} ({fmt}, selection only)")
         if args.from_selection:
@@ -624,9 +701,11 @@ def main(argv=None) -> int:
     if args.output:
         from .io import write_result
 
-        fmt = write_result(result, args.output, args.format)
+        keys, palette, key_info = _color_keys(args, result)
+        fmt = write_result(result, args.output, args.format, keys=keys)
         if not args.quiet:
             print(f"wrote {args.output} ({fmt})")
+        _report_color_keys(args, keys, palette, key_info, args.output, args.quiet)
 
     plot_structure = args.pole_figure_structure or next(
         (s for s in coloured if get_structure(s).colorable), None
