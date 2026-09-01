@@ -357,6 +357,39 @@ def build_parser() -> argparse.ArgumentParser:
     )
     group.add_argument("--ipf-density", help="write the IPF orientation density plot to this PNG")
     group.add_argument(
+        "--pole-figure-cmap",
+        metavar="NAME|FILE",
+        default="viridis",
+        help="colour map for the pole figure density: a matplotlib name "
+        "(viridis, jet, rainbow, turbo, magma, ...) or the path to an image "
+        "strip or a text table of RGB triples.  Default: %(default)s",
+    )
+    group.add_argument(
+        "--ipf-density-cmap",
+        metavar="NAME|FILE",
+        default="magma",
+        help="colour map for the IPF density plot.  Default: %(default)s",
+    )
+    group.add_argument(
+        "--pole-figure-smoothing",
+        type=float,
+        default=0.0,
+        metavar="DEGREES",
+        help="smooth the pole figure by this much, as a Gaussian standard "
+        "deviation in degrees.  Off by default.  A simulated cell has few, "
+        "nearly perfect grains, so its poles are far sharper than any "
+        "measured texture and the peak MRD comes out correspondingly high; a "
+        "few degrees brings it onto a scale comparable with a published "
+        "figure.  The plot is annotated with the width used",
+    )
+    group.add_argument(
+        "--ipf-density-smoothing",
+        type=float,
+        default=0.0,
+        metavar="DEGREES",
+        help="the same, for the IPF density plot",
+    )
+    group.add_argument(
         "--c-over-a",
         type=float,
         default=None,
@@ -754,6 +787,8 @@ def main(argv=None) -> int:
                 sample_frame=frame,
                 c_over_a=c_over_a,
                 mode=args.pole_figure_mode,
+                smoothing=args.pole_figure_smoothing,
+                cmap=args.pole_figure_cmap,
                 max_orientations=args.max_orientations,
                 filename=filename,
                 dpi=args.dpi,
@@ -769,6 +804,8 @@ def main(argv=None) -> int:
                 args.direction,
                 laue,
                 sample_frame=frame,
+                smoothing=args.ipf_density_smoothing,
+                cmap=args.ipf_density_cmap,
                 max_orientations=args.max_orientations,
                 filename=args.ipf_density,
                 dpi=args.dpi,

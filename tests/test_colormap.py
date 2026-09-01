@@ -148,3 +148,89 @@ def test_builtin_gradients_are_reported_as_the_approximation_they_are():
 def test_unknown_gradient_names_the_ones_that_exist():
     with pytest.raises(ValueError, match="jet"):
         gradient_keys([_ramp(10)], "not-a-colour-bar")
+
+
+# ----------------------------------------------------------------------
+# colour maps for the density plots
+# ----------------------------------------------------------------------
+def test_named_colormaps_resolve():
+    from ptmipf.colormap import PLOT_COLORMAPS, load_colormap
+
+    for name in PLOT_COLORMAPS:
+        assert load_colormap(name)(0.5) is not None
+    # jet and rainbow are here because the texture literature uses them.
+    assert "jet" in PLOT_COLORMAPS and "rainbow" in PLOT_COLORMAPS
+
+
+def test_an_unknown_colormap_says_what_is_on_offer():
+    from ptmipf.colormap import load_colormap
+
+    with pytest.raises(ValueError, match="viridis"):
+        load_colormap("not-a-colour-map")
+
+
+def test_a_colormap_array_is_used_as_given():
+    from ptmipf.colormap import load_colormap
+
+    colors = load_colormap(np.array([[1.0, 0, 0], [0, 0, 1.0]]))
+    assert np.allclose(colors(0.0)[:3], [1, 0, 0])
+    assert np.allclose(colors(1.0)[:3], [0, 0, 1])
+    with pytest.raises(ValueError, match=r"\(n, 3\)"):
+        load_colormap(np.zeros((4, 2)))
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("255 0 0\n0 0 255\n", [[1.0, 0, 0], [0, 0, 1.0]]),
+        ("1.0,0,0\n0,0,1.0\n", [[1.0, 0, 0], [0, 0, 1.0]]),
+        ("# a comment\n0 255 0 0\n1 0 0 255\n", [[1.0, 0, 0], [0, 0, 1.0]]),
+    ],
+)
+def test_colour_tables_are_read_in_the_shapes_people_write_them(text, expected):
+    """Whitespace or commas, 0 to 1 or 0 to 255, with or without an index column."""
+    from ptmipf.colormap import read_colormap_table
+
+    assert np.allclose(read_colormap_table(text), expected)
+
+
+@pytest.mark.parametrize(
+    "text,message",
+    [
+        ("1 0\n0 1\n", "three numbers"),
+        ("nope nope nope\n", "cannot read"),
+        ("1 0 0\n", "at least two"),
+        ("-1 0 0\n0 0 1\n", "0 to 1 or 0 to 255"),
+    ],
+)
+def test_a_broken_colour_table_says_why(text, message):
+    from ptmipf.colormap import read_colormap_table
+
+    with pytest.raises(ValueError, match=message):
+        read_colormap_table(text)
+
+
+def test_an_image_strip_is_read_left_to_right(tmp_path):
+    """Any height works, so a screenshot of a colour bar is usable."""
+    Image = pytest.importorskip("PIL.Image")
+    from ptmipf.colormap import load_colormap
+
+    strip = np.zeros((6, 3, 3), np.uint8)
+    strip[:, 0] = [255, 0, 0]
+    strip[:, 1] = [0, 255, 0]
+    strip[:, 2] = [0, 0, 255]
+    path = tmp_path / "bar.png"
+    Image.fromarray(strip).save(path)
+    colors = load_colormap(str(path))
+    assert np.allclose(colors(0.0)[:3], [1, 0, 0], atol=1 / 255)
+    assert np.allclose(colors(1.0)[:3], [0, 0, 1], atol=1 / 255)
+
+
+def test_the_colour_bar_written_for_ovito_is_a_valid_plot_colormap(tmp_path):
+    """The same file serves both, which is the point of it being a strip."""
+    from ptmipf.colormap import load_colormap
+
+    pytest.importorskip("PIL.Image")
+    palette, _, _ = quantise_colors([_ramp(200)])
+    path = write_color_map(palette, tmp_path / "ovito.png")
+    assert load_colormap(path).N == len(palette)

@@ -160,3 +160,46 @@ def test_a_builtin_colour_bar_reports_how_far_it_misses(crystal, tmp_path, capsy
     assert "approximation error" in printed
     # A built-in bar carries no file of its own to write.
     assert not (tmp_path / "jet_colormap.png").exists()
+
+
+def test_pole_figure_colour_map_and_smoothing_flags(crystal, tmp_path):
+    matplotlib = pytest.importorskip("matplotlib")
+    matplotlib.use("Agg")
+    assert main([
+        crystal, "--structures", "hcp", "-q", "--no-export-directions",
+        "--pole-figure", "0001",
+        "--pole-figure-file", str(tmp_path / "pf.png"),
+        "--pole-figure-cmap", "jet",
+        "--pole-figure-smoothing", "6",
+        "--ipf-density", str(tmp_path / "density.png"),
+        "--ipf-density-cmap", "rainbow",
+        "--ipf-density-smoothing", "4",
+    ]) == 0
+    assert (tmp_path / "pf.png").stat().st_size > 0
+    assert (tmp_path / "density.png").stat().st_size > 0
+
+
+def test_a_colour_map_file_is_accepted_by_the_cli(crystal, tmp_path):
+    matplotlib = pytest.importorskip("matplotlib")
+    matplotlib.use("Agg")
+    table = tmp_path / "scale.txt"
+    table.write_text("255 255 255\n255 0 0\n0 0 0\n")
+    assert main([
+        crystal, "--structures", "hcp", "-q", "--no-export-directions",
+        "--pole-figure", "0001",
+        "--pole-figure-file", str(tmp_path / "pf.png"),
+        "--pole-figure-cmap", str(table),
+    ]) == 0
+    assert (tmp_path / "pf.png").stat().st_size > 0
+
+
+def test_an_unknown_colour_map_stops_the_run(crystal, tmp_path):
+    matplotlib = pytest.importorskip("matplotlib")
+    matplotlib.use("Agg")
+    with pytest.raises(ValueError, match="unknown colour map"):
+        main([
+            crystal, "--structures", "hcp", "-q", "--no-export-directions",
+            "--pole-figure", "0001",
+            "--pole-figure-file", str(tmp_path / "pf.png"),
+            "--pole-figure-cmap", "not-a-colour-map",
+        ])

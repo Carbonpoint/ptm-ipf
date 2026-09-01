@@ -152,6 +152,9 @@ class AppState:
         self.generation = 0  # bumped on every visible change, used for cache busting
         self._fill_cache: tuple | None = None  # (radius, min_neighbours, generation)
         self._diagnostics: dict | None = None  # probed once, on first request
+        # A colour map uploaded this session, as an (n, 3) array.  Kept in
+        # memory rather than written anywhere, and gone when the server stops.
+        self.custom_colormap = None
         # Throughput used to turn stage boundaries into a percentage, refined
         # from every run this process completes; see _stage_progress.
         self._rates = dict(_SEED_RATES)

@@ -67,6 +67,15 @@ header):
   can be inverted; the selected atom count updates live. The selection can be
   highlighted (or shown alone) in the 3D view, the pole figures and IPF
   density can be restricted to it, and it exports to its own `.xyz`/`.dump`.
+* **Colour scales and smoothing**: both density plots carry a colour map menu
+  (`viridis`, `magma`, `jet`, `rainbow`, `turbo` and the rest) with an *upload
+  your own* entry that takes an image strip or a text table of RGB triples, so a
+  colour bar screenshotted from a paper can be used directly. An uploaded scale
+  is held in memory for the session and never written to disk. Beside it is a
+  smoothing box in degrees, off by default: a simulated cell has few, nearly
+  perfect grains, so its poles are far sharper than any measured texture and the
+  peak MRD comes out correspondingly high. A few degrees puts it on a
+  comparable scale, and the figure is annotated with the width used.
 * **Export**: the coloured configuration goes out as `.xyz` or `.dump`, with
   `Color.R/G/B` for the direction on screen so the file opens already coloured,
   plus one scalar column per direction listed in the *Colour-coding columns*

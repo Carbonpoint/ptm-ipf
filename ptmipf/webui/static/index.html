@@ -211,7 +211,14 @@
     </div>
     <div class="card">
       <div class="card-head"><h2>IPF density</h2>
-        <a id="download-density" class="small button" download>PNG</a>
+        <span class="row wrap">
+          <select id="density-cmap" title="colour scale"></select>
+          <label class="inline">smooth
+            <input id="density-smoothing" type="number" min="0" max="40" step="0.5" value="0"
+                   size="3"></label>
+          <span class="muted">&deg;</span>
+          <a id="download-density" class="small button" download>PNG</a>
+        </span>
       </div>
       <img id="density" class="figure" alt="IPF orientation density">
     </div>
@@ -223,6 +230,13 @@
           <label class="inline">c/a <input id="c-over-a" type="number" value="1.633" step="0.001"></label>
           <select id="pole-mode"><option value="density">density</option><option value="scatter">scatter</option></select>
           <select id="pole-structure" title="structure whose orientations are plotted"></select>
+          <select id="pole-cmap" title="colour scale"></select>
+          <label class="inline" title="Gaussian standard deviation in degrees. A simulated
+cell has few, nearly perfect grains, so its poles are far sharper than any measured
+texture; a few degrees brings the intensities onto a comparable scale.">smooth
+            <input id="pole-smoothing" type="number" min="0" max="40" step="0.5" value="0"
+                   size="3"></label>
+          <span class="muted">&deg;</span>
           <a id="download-poles" class="small button" download>PNG</a>
         </span>
       </div>
@@ -253,6 +267,21 @@
   </section>
 </main>
 </div>
+
+<dialog id="colormap-dialog">
+  <h2>Use your own colour scale</h2>
+  <p class="muted note">
+    An image strip, read left to right, or a text file of RGB triples one per line in
+    0 to 1 or 0 to 255. A screenshot of the colour bar from a paper works, and so does
+    the colour map this tool writes for OVITO. It is held in memory for this session
+    only and never written to disk.
+  </p>
+  <input id="colormap-file" type="file" accept="image/*,.txt,.csv,.dat,.lut,.rgb">
+  <p id="colormap-status" class="muted note"></p>
+  <span class="row">
+    <button id="colormap-close" class="small">Close</button>
+  </span>
+</dialog>
 
 <dialog id="browser-dialog">
   <h2>Choose a file</h2>

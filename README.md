@@ -413,6 +413,44 @@ what makes MRD meaningful. Poles are given in Miller or Miller–Bravais notatio
 Non-basal, non-prismatic hexagonal poles such as `{10-11}` depend on the axial ratio, so
 pass `--c-over-a` for your material (1.6236 for magnesium; the ideal 1.633 is the default).
 
+#### Smoothing, and why it is off by default
+
+A simulated cell holds a few dozen grains at most and each one is nearly perfect, so its
+poles arrive as very sharp spots and the peak MRD comes out far above anything an EBSD
+map of the same texture would report. A dozen random cubic grains give a `{111}` peak
+near 30 MRD unsmoothed and under 7 at five degrees, which is the range measured textures
+actually live in.
+
+```bash
+ptmipf mg.dump --structures hcp --pole-figure 0001 --pole-figure-file pf.png     --pole-figure-smoothing 5 --pole-figure-cmap jet
+```
+
+`--pole-figure-smoothing` is a Gaussian standard deviation in **degrees**, added in
+quadrature to the kernel the density estimate already uses. It is off by default and the
+figure is annotated with the width that was used, because a peak height means something
+different at ten degrees than at none. `--ipf-density-smoothing` does the same for the
+IPF density plot.
+
+The conversion from degrees is exact at the centre of the projection. Away from it the
+kernel becomes elliptical, compressed radially and stretched tangentially by up to
+`sqrt(2)` each way at the rim; the two are exact reciprocals, which is the projection
+being equal-area, so the solid angle the kernel spreads over is right everywhere and only
+its shape drifts. At the few degrees this is meant for that is not visible.
+
+#### Colour scales
+
+`--pole-figure-cmap` and `--ipf-density-cmap` take any matplotlib colour map name
+(`viridis`, `magma`, `jet`, `rainbow`, `turbo`, `coolwarm`, ...), or a path:
+
+```bash
+ptmipf mg.dump --structures hcp --pole-figure 0001 --pole-figure-file pf.png     --pole-figure-cmap ./scale_from_the_paper.png
+```
+
+A path may be an image strip, read left to right, or a text file of RGB triples one per
+line in 0 to 1 or 0 to 255. So a screenshot of the colour bar in the paper you are
+comparing against works, and so does the colour map this tool writes for OVITO. The web
+interface has the same menu on both plots, with an *upload your own* entry.
+
 ### Selecting atoms
 
 Any part of a configuration can be isolated and then coloured, plotted, rendered or

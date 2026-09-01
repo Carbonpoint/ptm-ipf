@@ -111,3 +111,124 @@ def test_stereographic_round_trip():
     v = upper_hemisphere(v / np.linalg.norm(v, axis=1, keepdims=True))
     x, y = stereographic(v)
     assert np.allclose(inverse_stereographic(x, y), v, atol=1e-10)
+
+
+# ----------------------------------------------------------------------
+# smoothing and colour scales
+# ----------------------------------------------------------------------
+def _sharp_rotations(n_grains=12, per_grain=300, seed=0):
+    """A handful of perfect grains, which is what an MD cell looks like."""
+    rng = np.random.default_rng(seed)
+    q = rng.normal(size=(n_grains, 4))
+    q /= np.linalg.norm(q, axis=1, keepdims=True)
+    x, y, z, w = q.T
+    m = np.empty((n_grains, 3, 3))
+    m[:, 0, 0] = 1 - 2 * (y * y + z * z)
+    m[:, 0, 1] = 2 * (x * y - z * w)
+    m[:, 0, 2] = 2 * (x * z + y * w)
+    m[:, 1, 0] = 2 * (x * y + z * w)
+    m[:, 1, 1] = 1 - 2 * (x * x + z * z)
+    m[:, 1, 2] = 2 * (y * z - x * w)
+    m[:, 2, 0] = 2 * (x * z - y * w)
+    m[:, 2, 1] = 2 * (y * z + x * w)
+    m[:, 2, 2] = 1 - 2 * (x * x + y * y)
+    return np.repeat(m, per_grain, axis=0)
+
+
+def test_angular_smoothing_converts_through_the_projection():
+    from ptmipf.polefigure import equal_area_sigma_bins
+
+    assert equal_area_sigma_bins(0.0, 300) == 0.0
+    # Lambert: one radian at the centre is 1/sqrt(2) of the disc radius.
+    expected = np.radians(10.0) / np.sqrt(2.0) * 150
+    assert equal_area_sigma_bins(10.0, 300) == pytest.approx(expected)
+    # Twice the resolution, twice the bins, for the same angle.
+    assert equal_area_sigma_bins(10.0, 600) == pytest.approx(2 * expected)
+
+
+def test_smoothing_brings_the_peak_down_and_leaves_the_normalisation_alone():
+    """The reason this option exists.
+
+    A simulated cell of a few perfect grains gives peak intensities far above
+    anything an EBSD map reports; a few degrees puts them on a comparable
+    scale.  What must not change is that MRD still means multiples of random,
+    so the mean over the disc stays one.
+    """
+    from ptmipf.polefigure import (
+        _combine,
+        _density_grid,
+        equal_area_sigma_bins,
+        pole_directions,
+    )
+    from ptmipf.projections import equal_area, upper_hemisphere
+    from ptmipf.symmetry import get_laue_group
+
+    laue = get_laue_group("m-3m")
+    directions = pole_directions(_sharp_rotations(), "111", laue, plane=True)
+    x, y = equal_area(upper_hemisphere(directions))
+
+    peaks = []
+    for degrees in (0.0, 3.0, 5.0, 10.0):
+        sigma = _combine(4.0, equal_area_sigma_bins(degrees, 300))
+        _, mrd = _density_grid(x, y, 300, sigma)
+        peaks.append(float(np.nanmax(mrd)))
+        assert np.nanmean(mrd) == pytest.approx(1.0, abs=1e-6)
+    assert peaks == sorted(peaks, reverse=True), peaks
+    # Unsmoothed, a dozen perfect grains give an MRD no measured texture shows.
+    assert peaks[0] > 20 and peaks[2] < 10
+
+
+def test_the_blur_takes_one_sigma_per_axis():
+    """The IPF sector grid has different bin widths on the two axes."""
+    from ptmipf.polefigure import _gaussian_blur
+
+    image = np.zeros((41, 41))
+    image[20, 20] = 1.0
+    wide = _gaussian_blur(image, (6.0, 0.0))
+    # The kernel is cut off at three standard deviations, so a fraction of a
+    # percent of the mass is lost rather than none of it.
+    assert wide[:, 20].sum() == pytest.approx(1.0, abs=0.01)
+    # Blurred along the first axis only, so a row still holds a single pixel.
+    assert np.count_nonzero(wide[20] > 1e-9) == 1
+    assert np.count_nonzero(wide[:, 20] > 1e-9) > 10
+    assert np.allclose(_gaussian_blur(image, 0.0), image)
+
+
+def test_a_smoothed_figure_says_so_on_itself():
+    """An MRD peak means something different at 10 degrees than at none."""
+    from ptmipf.polefigure import pole_figure
+    from ptmipf.symmetry import get_laue_group
+
+    rotations = _sharp_rotations(n_grains=4, per_grain=50)
+    laue = get_laue_group("m-3m")
+
+    plain = pole_figure(rotations, "111", laue)
+    assert not any("smoothed" in t.get_text() for t in plain.axes[0].texts)
+
+    smoothed = pole_figure(rotations, "111", laue, smoothing=7.5)
+    labels = [t.get_text() for t in smoothed.axes[0].texts]
+    assert any("smoothed 7.5" in text for text in labels), labels
+
+
+def test_pole_figures_accept_a_colour_map_by_name_or_by_table():
+    from matplotlib.colors import ListedColormap
+
+    from ptmipf.polefigure import pole_figure
+    from ptmipf.symmetry import get_laue_group
+
+    rotations = _sharp_rotations(n_grains=4, per_grain=50)
+    laue = get_laue_group("m-3m")
+    for cmap in ("jet", "rainbow", ListedColormap([[1, 0, 0], [0, 0, 1]])):
+        assert pole_figure(rotations, "111", laue, cmap=cmap) is not None
+    with pytest.raises(ValueError, match="unknown colour map"):
+        pole_figure(rotations, "111", laue, cmap="not-a-colour-map")
+
+
+def test_the_ipf_density_plot_takes_the_same_two_options():
+    from ptmipf.polefigure import ipf_density
+    from ptmipf.symmetry import get_laue_group
+
+    rotations = _sharp_rotations(n_grains=4, per_grain=50)
+    figure = ipf_density(rotations, "z", get_laue_group("m-3m"), cmap="jet", smoothing=6.0)
+    labels = [t.get_text() for t in figure.axes[0].texts]
+    assert any("smoothed 6" in text for text in labels), labels

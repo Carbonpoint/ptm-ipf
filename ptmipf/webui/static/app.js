@@ -20,6 +20,8 @@ const state = {
   atomInfo: null,
   command: null,       // last /api/command payload, for the one-line copy
   columns: null,       // the file's columns and the mapping controls built from them
+  customColormap: null,  // name of a colour scale uploaded this session
+  colormapTarget: null,  // which select opened the upload dialog
 };
 
 /* ------------------------------------------------------------------ */
@@ -270,6 +272,85 @@ function addFillParams(params) {
   return params;
 }
 
+/* ------------------------------------------------------------------ */
+/* colour scales for the density plots                                 */
+/* ------------------------------------------------------------------ */
+const CUSTOM_OPTION = "__upload__";
+
+function fillColormapSelects() {
+  const names = state.meta.colormaps || ["viridis"];
+  for (const [id, preferred] of [["pole-cmap", "viridis"], ["density-cmap", "magma"]]) {
+    const select = $(id);
+    select.replaceChildren();
+    for (const name of names) {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      if (name === preferred) option.selected = true;
+      select.append(option);
+    }
+    if (state.customColormap) {
+      const option = document.createElement("option");
+      option.value = "custom";
+      option.textContent = state.customColormap;
+      select.append(option);
+    }
+    const upload = document.createElement("option");
+    upload.value = CUSTOM_OPTION;
+    upload.textContent = "upload your own...";
+    select.append(upload);
+    select.dataset.previous = select.value;
+  }
+}
+
+/* The select doubles as the upload trigger, so the dialog has to put the
+ * previous choice back if nothing is uploaded after all. */
+function bindColormapSelect(id, onChange) {
+  const select = $(id);
+  select.addEventListener("change", () => {
+    if (select.value !== CUSTOM_OPTION) {
+      select.dataset.previous = select.value;
+      onChange();
+      return;
+    }
+    select.value = select.dataset.previous || "viridis";
+    openColormapDialog(id);
+  });
+}
+
+function openColormapDialog(selectId) {
+  state.colormapTarget = selectId;
+  $("colormap-status").textContent = "";
+  $("colormap-status").className = "muted note";
+  $("colormap-dialog").showModal();
+}
+
+async function uploadColormap(file) {
+  const note = $("colormap-status");
+  note.textContent = "reading " + file.name + "...";
+  note.className = "muted note";
+  try {
+    const buffer = new Uint8Array(await file.arrayBuffer());
+    let binary = "";
+    for (let i = 0; i < buffer.length; i += 1) binary += String.fromCharCode(buffer[i]);
+    const outcome = await postJSON("/api/colormap/upload",
+                                   { name: file.name, data: btoa(binary) });
+    state.customColormap = outcome.name;
+    const target = state.colormapTarget;
+    fillColormapSelects();
+    if (target) {
+      $(target).value = "custom";
+      $(target).dataset.previous = "custom";
+    }
+    note.textContent = `${outcome.name}: ${outcome.entries} colours, now in both menus`;
+    $("colormap-dialog").close();
+    refreshFigures();
+  } catch (error) {
+    note.textContent = error.message;
+    note.className = "error-text note";
+  }
+}
+
 function flatMapQuery(extra) {
   const params = new URLSearchParams({
     view: $("flat-view").value.trim() || "z",
@@ -473,7 +554,11 @@ function refreshFigures() {
   $("legend").src = legend;
   $("download-legend").href = legend + "&download=1";
 
-  const density = "/api/figure/ipfdensity?" + figureQuery({ structure: $("pole-structure").value });
+  const density = "/api/figure/ipfdensity?" + figureQuery({
+    structure: $("pole-structure").value,
+    cmap: $("density-cmap").value,
+    smoothing: $("density-smoothing").value,
+  });
   $("density").src = density;
   $("download-density").href = density + "&download=1";
 
@@ -484,6 +569,8 @@ function refreshFigures() {
       mode: $("pole-mode").value,
       structure: $("pole-structure").value,
       c_over_a: $("c-over-a").value,
+      cmap: $("pole-cmap").value,
+      smoothing: $("pole-smoothing").value,
     });
     $("polefig").src = url;
     $("download-poles").href = url + "&download=1";
@@ -1128,9 +1215,19 @@ async function init() {
   }
   $("highlight-mode").addEventListener("change", debouncedView);
 
-  for (const id of ["poles", "c-over-a", "pole-mode", "pole-structure"]) {
+  for (const id of ["poles", "c-over-a", "pole-mode", "pole-structure",
+                    "pole-smoothing", "density-smoothing"]) {
     $(id).addEventListener("change", debouncedFigures);
   }
+  fillColormapSelects();
+  bindColormapSelect("pole-cmap", debouncedFigures);
+  bindColormapSelect("density-cmap", debouncedFigures);
+  $("colormap-file").addEventListener("change", (event) => {
+    const file = event.target.files[0];
+    event.target.value = "";
+    if (file) uploadColormap(file);
+  });
+  $("colormap-close").addEventListener("click", () => $("colormap-dialog").close());
   $("legend-structure").addEventListener("change", debouncedFigures);
   $("figures-from-selection").addEventListener("change", refreshAll);
 

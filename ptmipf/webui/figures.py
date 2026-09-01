@@ -67,6 +67,8 @@ def pole_figure_png(
     structure: str | None = None,
     c_over_a: float | None = None,
     mode: str = "density",
+    smoothing: float = 0.0,
+    cmap="viridis",
     max_orientations: int = 200_000,
     dpi: int = 130,
 ) -> bytes:
@@ -81,6 +83,8 @@ def pole_figure_png(
         sample_frame=result.frame,
         c_over_a=IDEAL_C_OVER_A if c_over_a is None else float(c_over_a),
         mode=mode,
+        smoothing=smoothing,
+        cmap=cmap,
         max_orientations=max_orientations,
     )
     return figure_png(fig, dpi=dpi)
@@ -90,6 +94,8 @@ def ipf_density_png(
     result,
     direction,
     structure: str | None = None,
+    smoothing: float = 0.0,
+    cmap="magma",
     max_orientations: int = 200_000,
     dpi: int = 130,
 ) -> bytes:
@@ -102,6 +108,8 @@ def ipf_density_png(
         direction,
         laue,
         sample_frame=result.frame,
+        smoothing=smoothing,
+        cmap=cmap,
         max_orientations=max_orientations,
     )
     return figure_png(fig, dpi=dpi)

@@ -16,6 +16,7 @@ from .projections import equal_area, stereographic, upper_hemisphere
 from .symmetry import LaueGroup, get_laue_group
 
 __all__ = [
+    "equal_area_sigma_bins",
     "ipf_density",
     "miller_to_cartesian",
     "parse_miller",
@@ -158,18 +159,53 @@ def pole_directions(
     return poles
 
 
-def _gaussian_blur(image: np.ndarray, sigma: float) -> np.ndarray:
-    """Separable Gaussian blur, so SciPy is not needed at run time."""
-    if sigma <= 0:
+def _gaussian_blur(image: np.ndarray, sigma) -> np.ndarray:
+    """Separable Gaussian blur, so SciPy is not needed at run time.
+
+    *sigma* is one value or one per axis; the axes need separate values
+    whenever the two grid spacings differ, which they do for the inverse pole
+    figure sector.
+    """
+    sigmas = (float(sigma), float(sigma)) if np.isscalar(sigma) else tuple(float(v) for v in sigma)
+    if max(sigmas) <= 0:
         return image
-    radius = max(1, int(np.ceil(3 * sigma)))
-    x = np.arange(-radius, radius + 1)
-    kernel = np.exp(-0.5 * (x / sigma) ** 2)
-    kernel /= kernel.sum()
+    radius = max(1, int(np.ceil(3 * max(sigmas))))
     padded = np.pad(image, radius, mode="constant")
-    blurred = np.apply_along_axis(lambda row: np.convolve(row, kernel, mode="same"), 0, padded)
-    blurred = np.apply_along_axis(lambda row: np.convolve(row, kernel, mode="same"), 1, blurred)
-    return blurred[radius:-radius, radius:-radius]
+    for axis, value in enumerate(sigmas):
+        if value <= 0:
+            continue
+        x = np.arange(-radius, radius + 1)
+        kernel = np.exp(-0.5 * (x / value) ** 2)
+        kernel /= kernel.sum()
+        padded = np.apply_along_axis(
+            lambda row, k=kernel: np.convolve(row, k, mode="same"), axis, padded
+        )
+    return padded[radius:-radius, radius:-radius]
+
+
+def _combine(bandwidth: float, extra: float) -> float:
+    """Two Gaussians in series are one Gaussian, widths adding in quadrature."""
+    return float(np.hypot(bandwidth, extra))
+
+
+def equal_area_sigma_bins(degrees: float, resolution: int) -> float:
+    """An angular smoothing width in equal-area disc bins.
+
+    The Lambert projection puts a direction at polar angle ``t`` from the
+    centre at radius ``sqrt(2) sin(t/2)``, so near the centre one radian of arc
+    is ``1/sqrt(2)`` of the disc radius, and that is the conversion used.
+
+    Away from the centre the kernel becomes elliptical: radially it is
+    compressed and tangentially stretched, by up to ``sqrt(2)`` each way at the
+    rim.  The two factors are exact reciprocals, which is the projection being
+    equal-area, so the solid angle the kernel spreads over is right everywhere
+    and only its shape drifts.  For the few degrees of smoothing this is meant
+    for, that is not visible; it is written down because at 40 degrees it would
+    be.
+    """
+    if degrees <= 0:
+        return 0.0
+    return float(np.radians(degrees) / np.sqrt(2.0) * (resolution / 2.0))
 
 
 def _density_grid(x, y, resolution: int, sigma_bins: float):
@@ -220,10 +256,11 @@ def pole_figure(
     plane: bool = True,
     mode: str = "density",
     resolution: int = 300,
-    smoothing: float = 4.0,
+    bandwidth: float = 4.0,
+    smoothing: float = 0.0,
     max_orientations: int = 200_000,
     contours: int = 12,
-    cmap: str = "viridis",
+    cmap="viridis",
     filename=None,
     dpi: int = 200,
     seed: int = 0,
@@ -245,6 +282,24 @@ def pole_figure(
         Sample axes placed at the top, at the right, and at the centre.
     mode
         ``"density"`` for a contoured MRD map, ``"scatter"`` for individual poles.
+    bandwidth
+        Kernel width of the density estimate, in grid bins.  This is what makes
+        the plot a density rather than a histogram of delta functions and is
+        not meant to be a knob.
+    smoothing
+        Extra smoothing, as a Gaussian standard deviation in **degrees** of
+        misorientation, added in quadrature to *bandwidth*.  Off by default.
+
+        A simulated cell is a few thousand grains at most and its grains are
+        nearly perfect, so its poles arrive as very sharp spots and the peak
+        MRD comes out far above anything an EBSD map of the same texture would
+        report.  A few degrees of smoothing puts the intensities on a scale
+        comparable with the published figure next to it.  It is a presentation
+        choice, not a measurement, so the figure is annotated with the width
+        that was used.
+    cmap
+        A matplotlib colour map name, a colour map, an ``(n, 3)`` array, or the
+        path to an image strip or a text table of RGB triples.
     max_orientations
         Orientations are randomly subsampled to this many before plotting.
 
@@ -254,6 +309,7 @@ def pole_figure(
     """
     import matplotlib.pyplot as plt
 
+    from .colormap import load_colormap
     from .frames import SampleFrame
 
     if not isinstance(laue, LaueGroup):
@@ -261,6 +317,8 @@ def pole_figure(
     if isinstance(poles, (str, tuple)) and not isinstance(poles, list):
         poles = [poles]
     frame = sample_frame or SampleFrame()
+    colors = load_colormap(cmap)
+    sigma = _combine(bandwidth, equal_area_sigma_bins(smoothing, resolution))
 
     rotations = np.asarray(rotations, dtype=float)
     if len(rotations) > max_orientations:
@@ -282,14 +340,21 @@ def pole_figure(
         if mode == "scatter":
             ax.scatter(x, y, s=1.0, c="tab:blue", alpha=0.25, linewidths=0, zorder=3)
         else:
-            centers, mrd = _density_grid(x, y, resolution, smoothing)
+            centers, mrd = _density_grid(x, y, resolution, sigma)
             gx, gy = np.meshgrid(centers, centers, indexing="ij")
-            contour = ax.contourf(gx, gy, mrd, levels=contours, cmap=cmap, zorder=3)
+            contour = ax.contourf(gx, gy, mrd, levels=contours, cmap=colors, zorder=3)
             bar = fig.colorbar(contour, ax=ax, fraction=0.046, pad=0.08)
             bar.set_label("MRD", fontsize=9)
 
         _draw_frame(ax, frame.label(up), frame.label(right))
         ax.set_title(_format_indices(str(pole), "{}" if plane else "<>"), fontsize=11)
+        if smoothing > 0 and mode != "scatter":
+            # The figure has to carry its own provenance: an MRD peak means
+            # something different at 10 degrees of smoothing than at none.
+            ax.text(
+                0, -1.22, f"smoothed {smoothing:g}\u00b0", ha="center", va="top",
+                fontsize=8, color="0.35",
+            )
 
     fig.tight_layout()
     if filename is not None:
@@ -303,10 +368,11 @@ def ipf_density(
     laue,
     sample_frame=None,
     resolution: int = 400,
-    smoothing: float = 4.0,
+    bandwidth: float = 4.0,
+    smoothing: float = 0.0,
     max_orientations: int = 200_000,
     contours: int = 12,
-    cmap: str = "magma",
+    cmap="magma",
     filename=None,
     dpi: int = 200,
     seed: int = 0,
@@ -314,10 +380,14 @@ def ipf_density(
     """Plot the density of crystal directions inside the IPF fundamental sector.
 
     This is the inverse pole figure that accompanies an IPF-coloured map: it
-    shows how much of the sample actually sits at each colour.
+    shows how much of the sample actually sits at each colour.  *bandwidth*,
+    *smoothing* and *cmap* mean what they do in :func:`pole_figure`, except
+    that this plot is stereographic rather than equal-area, so the angular
+    conversion uses that projection's own scale.
     """
     import matplotlib.pyplot as plt
 
+    from .colormap import load_colormap
     from .frames import SampleFrame
 
     if not isinstance(laue, LaueGroup):
@@ -345,7 +415,12 @@ def ipf_density(
         np.linspace(*yr, resolution + 1),
     )
     counts, _, _ = np.histogram2d(x, y, bins=bins)
-    density = _gaussian_blur(counts, smoothing)
+    # Stereographic: radius is tan(t/2), so one radian near the centre is half a
+    # unit of the plot.  The two axes carry different bin widths here, so each
+    # gets its own sigma rather than one shared value.
+    span = np.array([xr[1] - xr[0], yr[1] - yr[0]])
+    extra = np.radians(smoothing) * 0.5 * resolution / span if smoothing > 0 else (0.0, 0.0)
+    density = _gaussian_blur(counts, [_combine(bandwidth, e) for e in np.atleast_1d(extra)])
 
     cx = 0.5 * (bins[0][:-1] + bins[0][1:])
     cy = 0.5 * (bins[1][:-1] + bins[1][1:])
@@ -358,7 +433,7 @@ def ipf_density(
     # Wide enough, with the bar pushed out, that the corner labels of the
     # sector do not run into the colour bar.
     fig, ax = plt.subplots(figsize=(4.8, 3.4))
-    contour = ax.contourf(gx, gy, mrd, levels=contours, cmap=cmap, zorder=2)
+    contour = ax.contourf(gx, gy, mrd, levels=contours, cmap=load_colormap(cmap), zorder=2)
     bar = fig.colorbar(contour, ax=ax, fraction=0.046, pad=0.16)
     bar.set_label("MRD", fontsize=9)
     ax.plot(ex, ey, color="black", lw=1.0, zorder=3)
@@ -366,6 +441,15 @@ def ipf_density(
     place_vertex_labels(ax, laue, fontsize=10)
 
     ax.set_title(f"IPF {frame.label(direction)}  ({laue.name})", fontsize=11, pad=18)
+    if smoothing > 0:
+        # Below the sector rather than in the title: the title sits under the
+        # [111] vertex label and a longer one runs into it.  The figure still
+        # carries its own provenance, which is the point.
+        ax.text(
+            0.5 * (ex.min() + ex.max()), ey.min() - 0.09,
+            f"smoothed {smoothing:g}\u00b0",
+            ha="center", va="top", fontsize=8, color="0.35",
+        )
     ax.set_aspect("equal")
     ax.axis("off")
     ax.margins(0.26)

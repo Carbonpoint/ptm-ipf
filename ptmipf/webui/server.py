@@ -35,6 +35,7 @@ import numpy as np
 
 from .. import __version__
 from ..analysis import DEFAULT_OTHER_COLOR
+from ..colormap import PLOT_COLORMAPS
 from ..io import temporary_path
 from ..polefigure import IDEAL_C_OVER_A
 from ..structures import DEFAULT_STRUCTURES, STRUCTURES
@@ -282,6 +283,7 @@ class Handler(BaseHTTPRequestHandler):
                     "c_over_a": round(IDEAL_C_OVER_A, 6),
                     "poles": ["0001", "10-10", "11-20"],
                 },
+                "colormaps": list(PLOT_COLORMAPS),
                 "selection_available": has_select,
             }
         )
@@ -401,6 +403,8 @@ class Handler(BaseHTTPRequestHandler):
                 structure=query.get("structure", [None])[0],
                 c_over_a=_number(query, "c_over_a", IDEAL_C_OVER_A),
                 mode=query.get("mode", ["density"])[0],
+                smoothing=max(0.0, _number(query, "smoothing", 0.0)),
+                cmap=self._colormap(query, "viridis"),
             )
         download = "pole_figures.png" if _flag(query, "download") else None
         self._send(body, "image/png", download=download)
@@ -411,7 +415,11 @@ class Handler(BaseHTTPRequestHandler):
             result = self._figure_result(query)
             direction = self.state.colour_params.get("direction", "z")
             body = figures.ipf_density_png(
-                result, direction, structure=query.get("structure", [None])[0]
+                result,
+                direction,
+                structure=query.get("structure", [None])[0],
+                smoothing=max(0.0, _number(query, "smoothing", 0.0)),
+                cmap=self._colormap(query, "magma"),
             )
         download = "ipf_density.png" if _flag(query, "download") else None
         self._send(body, "image/png", download=download)
@@ -596,6 +604,67 @@ class Handler(BaseHTTPRequestHandler):
         )
         self._json(report)
 
+    def _colormap(self, query, default: str):
+        """The colour map a figure request asks for.
+
+        ``cmap=custom`` means the one uploaded in this session, which is held
+        as an array rather than a file so nothing an upload contains is ever
+        written to disk.
+        """
+        from ..colormap import load_colormap
+
+        name = query.get("cmap", [default])[0] or default
+        if name == "custom":
+            table = self.state.custom_colormap
+            if table is None:
+                raise ApiError("no colour map has been uploaded in this session")
+            return load_colormap(table)
+        try:
+            return load_colormap(name)
+        except ValueError as exc:
+            raise ApiError(str(exc)) from None
+
+    def _post_colormap(self):
+        """Take a colour map uploaded from the browser, as base64.
+
+        An image strip or a text table of RGB triples.  It is parsed here and
+        kept as an array in memory: the server never writes an uploaded file
+        anywhere, and it lasts as long as the session does.
+        """
+        import base64
+        import binascii
+
+        from ..colormap import read_colormap_image, read_colormap_table
+
+        body = self._body()
+        try:
+            raw = base64.b64decode(body.get("data", ""), validate=True)
+        except (binascii.Error, ValueError):
+            raise ApiError("the uploaded colour map could not be decoded") from None
+        if not raw:
+            raise ApiError("the uploaded colour map is empty")
+        if len(raw) > 8 << 20:
+            raise ApiError("that file is far too large to be a colour map")
+
+        name = str(body.get("name") or "custom")
+        reader = read_colormap_image if raw[:8] in (b"\x89PNG\r\n\x1a\n",) or raw[:2] in (
+            b"\xff\xd8",
+            b"BM",
+        ) else read_colormap_table
+        try:
+            table = reader(raw)
+        except Exception as exc:
+            # A wrong guess at the format is the likely cause, so try the other.
+            other = read_colormap_table if reader is read_colormap_image else read_colormap_image
+            try:
+                table = other(raw)
+            except Exception:
+                raise ApiError(f"{name} is not a colour map this can read: {exc}") from None
+
+        with self.state.lock:
+            self.state.custom_colormap = table
+        self._json({"name": name, "entries": int(len(table))})
+
     def _get_atom(self, query):
         index = int(_number(query, "index", -1))
         self._json(self.state.atom_info(index))
@@ -619,6 +688,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/command": self._post_command,
             "/api/command/parse": self._post_parse_command,
             "/api/examples/build": self._post_build_example,
+            "/api/colormap/upload": self._post_colormap,
         }
         if url.path in routes:
             self._dispatch(routes[url.path])

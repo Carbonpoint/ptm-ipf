@@ -513,6 +513,77 @@ def test_building_an_example_refuses_settings_that_would_not_run(base):
     assert "box" in json.loads(caught.value.read())["error"]
 
 
+def test_the_colour_maps_on_offer_are_listed(base):
+    meta = _get_json(base, "/api/meta")
+    assert "jet" in meta["colormaps"] and "viridis" in meta["colormaps"]
+
+
+@pytest.mark.parametrize(
+    "query", ["cmap=jet", "cmap=rainbow", "smoothing=8", "cmap=turbo&smoothing=4"]
+)
+def test_pole_figures_take_a_colour_map_and_a_smoothing_width(base, analysed, query):
+    status, _, body = _get(base, f"/api/figure/poles?poles=0001&{query}")
+    assert status == 200
+    assert _decode_png(body).size > 0
+
+
+def test_smoothing_changes_the_figure(base, analysed):
+    """If the option did nothing the two images would be identical."""
+    _, _, plain = _get(base, "/api/figure/poles?poles=0001")
+    _, _, smoothed = _get(base, "/api/figure/poles?poles=0001&smoothing=10")
+    assert plain != smoothed
+
+
+def test_the_ipf_density_takes_them_too(base, analysed):
+    status, _, body = _get(base, "/api/figure/ipfdensity?cmap=jet&smoothing=5")
+    assert status == 200
+    assert _decode_png(body).size > 0
+
+
+def test_an_unknown_colour_map_is_a_message_not_a_traceback(base, analysed):
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        _get(base, "/api/figure/poles?poles=0001&cmap=not-a-colour-map")
+    assert caught.value.code == 400
+    assert "colour map" in json.loads(caught.value.read())["error"]
+
+
+def _upload_colormap(base, name, raw):
+    import base64
+
+    return _post_json(
+        base, "/api/colormap/upload", {"name": name, "data": base64.b64encode(raw).decode()}
+    )
+
+
+def test_a_colour_map_can_be_uploaded_as_a_table(base, analysed):
+    table = b"# copied from a paper\n255 255 255\n255 200 0\n200 0 0\n0 0 0\n"
+    assert _upload_colormap(base, "paper.txt", table) == {"name": "paper.txt", "entries": 4}
+    status, _, body = _get(base, "/api/figure/poles?poles=0001&cmap=custom")
+    assert status == 200
+    assert _decode_png(body).size > 0
+
+
+def test_a_colour_map_can_be_uploaded_as_an_image(base, analysed):
+    """A screenshot of a colour bar, or the strip this tool writes for OVITO."""
+    import io
+
+    Image = pytest.importorskip("PIL.Image")
+    ramp = np.linspace(0, 255, 32).astype(np.uint8)
+    strip = np.stack([ramp, np.zeros_like(ramp), 255 - ramp], axis=1)[None].repeat(4, axis=0)
+    buffer = io.BytesIO()
+    Image.fromarray(strip).save(buffer, format="PNG")
+    outcome = _upload_colormap(base, "bar.png", buffer.getvalue())
+    assert outcome["entries"] == 32
+    assert _get(base, "/api/figure/ipfdensity?cmap=custom")[0] == 200
+
+
+@pytest.mark.parametrize("raw", [b"", b"\x00\x01\x02 not a colour map at all"])
+def test_an_upload_that_is_not_a_colour_map_is_refused(base, raw):
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        _upload_colormap(base, "junk.bin", raw)
+    assert caught.value.code == 400
+
+
 def test_diagnostics_report_what_the_installation_can_do(base):
     """A blank 3D view is a server-side renderer problem; this is where it shows."""
     report = _get_json(base, "/api/diagnostics")

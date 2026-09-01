@@ -25,16 +25,20 @@ the error it incurs rather than hiding it.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import numpy as np
 
 __all__ = [
     "BUILTIN_GRADIENTS",
+    "PLOT_COLORMAPS",
     "MAX_PALETTE_ENTRIES",
     "color_keys",
     "direction_column",
     "gradient_keys",
     "keys_from_indices",
+    "load_colormap",
+    "read_colormap_table",
     "quantise_colors",
     "sample_gradient",
     "write_color_map",
@@ -262,3 +266,107 @@ def color_keys(
             "mean_error": worst,
         }
     return dict(zip(names, values)), palette, info
+
+
+# ----------------------------------------------------------------------
+# colour maps for the plots
+# ----------------------------------------------------------------------
+#: Colour maps offered for the density plots.  Sequential ones first, because
+#: a density is a sequential quantity and jet reads a smooth gradient as a set
+#: of false bands; jet and rainbow are here because a great deal of the
+#: published texture literature uses them and a figure has to be comparable
+#: with the one it sits next to.
+PLOT_COLORMAPS = (
+    "viridis", "magma", "inferno", "plasma", "cividis",
+    "jet", "rainbow", "turbo", "coolwarm", "hot", "Greys",
+)
+
+
+def read_colormap_table(data) -> np.ndarray:
+    """Read a colour map given as text: one RGB triple per line.
+
+    Accepts values in 0 to 1 or 0 to 255, separated by whitespace, commas or
+    semicolons, with ``#`` comments and an optional leading index column.
+    """
+    if isinstance(data, bytes):
+        data = data.decode("utf-8", errors="replace")
+    rows = []
+    for line in str(data).splitlines():
+        line = line.split("#")[0].replace(",", " ").replace(";", " ").strip()
+        if not line:
+            continue
+        fields = line.split()
+        if len(fields) == 4:
+            fields = fields[1:]  # an index column, which some tools write
+        if len(fields) != 3:
+            raise ValueError(
+                f"a colour map table needs three numbers a line, got {len(fields)}"
+            )
+        try:
+            rows.append([float(f) for f in fields])
+        except ValueError:
+            raise ValueError(f"cannot read {line!r} as a colour") from None
+    if len(rows) < 2:
+        raise ValueError("a colour map needs at least two colours")
+    table = np.asarray(rows, dtype=float)
+    if table.max() > 1.0:
+        table = table / 255.0
+    if table.min() < 0.0 or table.max() > 1.0:
+        raise ValueError("colour components must lie in 0 to 1 or 0 to 255")
+    return table
+
+
+def read_colormap_image(data) -> np.ndarray:
+    """Read a colour map from an image strip, left to right.
+
+    Any height is accepted and the rows are averaged, so a bar exported for
+    OVITO, a screenshot of a colour scale or a one pixel strip all work.
+    """
+    import io
+
+    from PIL import Image
+
+    with Image.open(io.BytesIO(data) if isinstance(data, bytes) else data) as image:
+        array = np.asarray(image.convert("RGB"), dtype=float) / 255.0
+    if array.ndim != 3:
+        raise ValueError("that image could not be read as a colour map")
+    return array.mean(axis=0)
+
+
+def load_colormap(spec):
+    """Resolve *spec* to a matplotlib colour map.
+
+    Accepts a matplotlib colour map name, an already built colour map, an
+    ``(n, 3)`` array of colours, or the path to an image strip or a text table
+    of RGB triples.  Paths are how a colour scale from a paper, or the bar this
+    package writes for OVITO, is reused for the plots.
+    """
+    from matplotlib.colors import Colormap, ListedColormap
+
+    if spec is None:
+        return None
+    if isinstance(spec, Colormap):
+        return spec
+    if isinstance(spec, np.ndarray) or isinstance(spec, (list, tuple)):
+        table = np.asarray(spec, dtype=float)
+        if table.ndim != 2 or table.shape[1] != 3:
+            raise ValueError("a colour map array must have shape (n, 3)")
+        return ListedColormap(np.clip(table, 0.0, 1.0), name="custom")
+
+    text = str(spec)
+    path = Path(text)
+    if path.exists() and path.is_file():
+        raw = path.read_bytes()
+        if path.suffix.lower() in (".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff"):
+            return ListedColormap(read_colormap_image(raw), name=path.stem)
+        return ListedColormap(read_colormap_table(raw), name=path.stem)
+
+    import matplotlib
+
+    try:
+        return matplotlib.colormaps[text]
+    except KeyError:
+        raise ValueError(
+            f"unknown colour map {text!r}: give a matplotlib name "
+            f"({', '.join(PLOT_COLORMAPS)}, ...) or a path to an image or a table"
+        ) from None
