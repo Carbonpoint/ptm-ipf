@@ -37,6 +37,7 @@ examples = ["ase>=3.22"]
 [project.scripts]
 ptmipf = "ptmipf.cli:main"
 ptmipf-ui = "ptmipf.webui:main"
+ptmipf-example = "ptmipf.examples:main"
 
 [tool.setuptools.packages.find]
 include = ["ptmipf*"]

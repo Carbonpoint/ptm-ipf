@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ptm-ipf examples</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><polygon points='2,14 14,14 8,2' fill='%23c33'/></svg>">
+</head>
+<body>
+<header>
+  <h1>ptm-ipf <span class="muted">examples</span></h1>
+  <span id="status" class="status">choose an example</span>
+  <a class="ghost button" href="/">Back to the analysis</a>
+  <button id="theme-toggle" class="ghost" title="Toggle light/dark theme">◐</button>
+</header>
+
+<div class="examples-page">
+  <section class="card">
+    <h2>A polycrystal to squash</h2>
+    <p class="note">
+      Each of these builds a small cube of randomly oriented grains, downloads the
+      matching EAM potential from the
+      <a href="https://www.ctcms.nist.gov/potentials/" target="_blank" rel="noreferrer">NIST
+      Interatomic Potentials Repository</a>, and writes a LAMMPS input that compresses it
+      along z. Nothing is run for you: the files land in a folder under the directory this
+      server is serving, and the run is sized to finish on a laptop while you make coffee.
+    </p>
+    <div id="atomsk-note" class="banner" hidden></div>
+    <div id="catalogue" class="catalogue"></div>
+  </section>
+
+  <section class="card">
+    <h2>Settings</h2>
+    <p class="note">The defaults are sized for a couple of minutes. Bigger cells and more
+    grains look better and cost more; the estimate updates as you change them.</p>
+    <div class="settings">
+      <label class="inline">box edge
+        <input id="box" type="number" min="12" max="200" step="1" value="48"></label>
+      <span class="muted">&#8491;</span>
+      <label class="inline">grains
+        <input id="grains" type="number" min="1" max="64" step="1" value="6"></label>
+      <label class="inline">strain
+        <input id="strain" type="number" min="0.005" max="0.5" step="0.01" value="0.10"></label>
+      <label class="inline">strain rate
+        <input id="strain-rate" type="number" min="0.00001" max="0.1" step="0.0005"
+               value="0.0025"></label>
+      <span class="muted">/ps</span>
+      <label class="inline">temperature
+        <input id="temperature" type="number" min="1" max="2000" step="10" value="300"></label>
+      <span class="muted">K</span>
+      <label class="inline">seed
+        <input id="seed" type="number" min="0" step="1" value="1"></label>
+      <label class="inline">builder
+        <select id="builder">
+          <option value="atomsk">atomsk</option>
+          <option value="voronoi">built in fallback</option>
+        </select>
+      </label>
+    </div>
+  </section>
+
+  <section id="result-card" class="card" hidden>
+    <h2>Built</h2>
+    <div id="result"></div>
+  </section>
+</div>
+
+<script src="/static/examples.js"></script>
+</body>
+</html>

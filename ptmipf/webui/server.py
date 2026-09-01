@@ -71,6 +71,51 @@ def _selection_active(state: AppState, mode: str) -> np.ndarray | None:
     return state.selection_mask
 
 
+#: Column names that usually hold what, lower case, most specific first.
+_ORIENTATION_HINTS = ("orientation", "quat", "q")
+_STRUCTURE_HINTS = ("structure type", "structuretype", "structure", "phase", "ptm")
+_RMSD_HINTS = ("rmsd", "interatomic distance")
+
+
+def _guess_orientation_columns(columns: list) -> dict:
+    """A first guess at the column mapping, for the interface to show.
+
+    Only a guess: nothing in a file says which convention its quaternions
+    follow, so the interface presents this as a starting point and leaves the
+    choice with the person who made the file.
+    """
+    guess = {"quaternion": [], "structure_type": "", "rmsd": ""}
+    by_name = {c["name"].lower(): c for c in columns}
+
+    for hint in _ORIENTATION_HINTS:
+        four = [c for c in columns if c["components"] == 4 and hint in c["name"].lower()]
+        if four:
+            guess["quaternion"] = [four[0]["name"]]
+            break
+        scalars = sorted(
+            c["name"] for c in columns if c["components"] == 1 and hint in c["name"].lower()
+        )
+        if len(scalars) == 4:
+            guess["quaternion"] = scalars
+            break
+    if not guess["quaternion"]:
+        four = [c for c in columns if c["components"] == 4]
+        if len(four) == 1:
+            guess["quaternion"] = [four[0]["name"]]
+
+    for hint in _STRUCTURE_HINTS:
+        match = next((n for n in by_name if hint in n), None)
+        if match:
+            guess["structure_type"] = by_name[match]["name"]
+            break
+    for hint in _RMSD_HINTS:
+        match = next((n for n in by_name if hint in n), None)
+        if match:
+            guess["rmsd"] = by_name[match]["name"]
+            break
+    return guess
+
+
 def _export_keys(result, query: dict):
     """Colour-coding columns for an export request.
 
@@ -190,18 +235,20 @@ class Handler(BaseHTTPRequestHandler):
             "/api/export": self._get_export,
             "/api/colormap": self._get_colormap,
             "/api/diagnostics": self._get_diagnostics,
+            "/api/columns": self._get_columns,
+            "/api/examples": self._get_examples,
             "/api/atom": self._get_atom,
             "/api/slicebounds": self._get_slice_bounds,
         }
         if url.path in routes:
             self._dispatch(routes[url.path], query)
-        elif url.path == "/" or url.path.startswith("/static/"):
+        elif url.path in ("/", "/examples") or url.path.startswith("/static/"):
             self._dispatch(self._get_static, url.path)
         else:
             self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
     def _get_static(self, path: str):
-        name = "index.html" if path == "/" else Path(path).name
+        name = {"/": "index.html", "/examples": "examples.html"}.get(path) or Path(path).name
         target = (STATIC_DIR / name).resolve()
         if STATIC_DIR.resolve() not in target.parents or not target.is_file():
             raise ApiError("not found", HTTPStatus.NOT_FOUND)
@@ -449,6 +496,106 @@ class Handler(BaseHTTPRequestHandler):
         """
         self._json(self.state.diagnostics())
 
+    def _get_columns(self, query):
+        """The per-atom columns a file carries, for the orientation import.
+
+        Reads the file but runs nothing on it, so a mapping is chosen from what
+        is really there rather than from what the column was called last time.
+        """
+        from ..analysis import list_columns
+
+        state = self.state
+        path = query.get("path", [""])[0]
+        if not path:
+            raise ApiError("a file path is required")
+        target = state.resolve(path)
+        if not target.is_file():
+            raise FileNotFoundError(f"no such file: {path}")
+        frame_index = int(_number(query, "frame", 0))
+        info = state.ovito.submit(list_columns, str(target), frame_index).result()
+        info["path"] = str(target)
+        info["guess"] = _guess_orientation_columns(info["columns"])
+        self._json(info)
+
+    def _get_examples(self, query):
+        """The starter examples on offer, and whether atomsk is here to build them."""
+        from ..examples import DEFAULTS
+        from ..lammps import estimate_cost
+        from ..polycrystal import ATOMSK_HELP, find_atomsk
+        from ..potentials import POTENTIALS
+
+        atomsk = find_atomsk()
+        entries = []
+        for name, spec in DEFAULTS.items():
+            potential = POTENTIALS[spec.element]
+            # Close enough to size the promise before anything is built.
+            per_cell = 4 if potential.structure == "fcc" else 2
+            atoms = int(0.97 * per_cell * (spec.box / potential.a0) ** 3)
+            steps = int(spec.strain / spec.strain_rate / 0.002) + 2000
+            entries.append(
+                {
+                    "name": name,
+                    "element": spec.element,
+                    "structure": potential.structure,
+                    "citation": potential.citation,
+                    "url": potential.entry_url,
+                    "a0": potential.a0,
+                    "atoms_per_cell": per_cell,
+                    "spec": {
+                        "element": spec.element,
+                        "box": spec.box,
+                        "n_grains": spec.n_grains,
+                        "strain": spec.strain,
+                        "strain_rate": spec.strain_rate,
+                        "temperature": spec.temperature,
+                        "seed": spec.seed,
+                    },
+                    "estimate": {
+                        "n_atoms": atoms,
+                        **{
+                            k: (round(v, 2) if isinstance(v, float) else v)
+                            for k, v in estimate_cost(atoms, steps).items()
+                        },
+                    },
+                }
+            )
+        self._json(
+            {
+                "examples": entries,
+                "root": str(self.state.root),
+                "atomsk": atomsk,
+                "atomsk_help": ATOMSK_HELP,
+            }
+        )
+
+    def _post_build_example(self):
+        """Build one example under the served root.
+
+        Synchronous: the download is under a megabyte and atomsk builds a cell
+        this size in a second or two, so a job queue would be more machinery
+        than the wait deserves.
+        """
+        from ..examples import ExampleSpec, build_example
+
+        body = self._body()
+        fields = {
+            k: v
+            for k, v in body.items()
+            if k in ExampleSpec.__dataclass_fields__ and v is not None
+        }
+        try:
+            report = self.state.ovito.submit(
+                build_example, self.state.root, ExampleSpec(**fields)
+            ).result()
+        except (RuntimeError, ValueError) as exc:
+            raise ApiError(str(exc)) from None
+        report["relative_xyz"] = str(
+            Path(report["relative"]) / next(
+                (f for f in report["files"] if f.endswith(".xyz")), "structure.xyz"
+            )
+        )
+        self._json(report)
+
     def _get_atom(self, query):
         index = int(_number(query, "index", -1))
         self._json(self.state.atom_info(index))
@@ -471,6 +618,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/pick": self._post_pick,
             "/api/command": self._post_command,
             "/api/command/parse": self._post_parse_command,
+            "/api/examples/build": self._post_build_example,
         }
         if url.path in routes:
             self._dispatch(routes[url.path])

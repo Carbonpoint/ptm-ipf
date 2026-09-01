@@ -12,6 +12,7 @@
   <h1>ptm-ipf <span id="version" class="muted"></span></h1>
   <span id="status" class="status">idle</span>
   <button id="cmd-button" class="ghost" title="Show the equivalent ptmipf command line" disabled>CLI command</button>
+  <a class="ghost button" href="/examples" title="Build a small polycrystal and a LAMMPS run to try this on">Examples</a>
   <button id="theme-toggle" class="ghost" title="Toggle light/dark theme">◐</button>
 </header>
 
@@ -28,6 +29,7 @@
     </label>
     <label class="inline">Trajectory frame <input id="frame-index" type="number" value="0" min="0"></label>
     <button id="analyse" class="primary">Analyse</button>
+    <progress id="analysis-progress" max="1" value="0" hidden></progress>
     <div id="summary" class="summary" hidden>
       <div id="summary-head"></div>
       <div id="counts"></div>
@@ -43,6 +45,20 @@
     <label>Colour only <span class="hint">(others keep the “other” colour)</span></label>
     <div id="color-only" class="checks"></div>
     <label class="inline">“Other” colour <input id="other-color" type="color" value="#595959"></label>
+  </details>
+
+  <details id="columns-section">
+    <summary>Orientations already in the file</summary>
+    <p class="hint">For a configuration another OVITO session has already run PTM on.
+    Name the columns that hold the quaternions and they are coloured directly, with no
+    second PTM run.</p>
+    <label class="inline"><input id="use-columns" type="checkbox">
+      read the orientations from columns</label>
+    <div class="row">
+      <button id="read-columns" class="small">Read the columns</button>
+      <span id="columns-status" class="muted"></span>
+    </div>
+    <div id="column-map" hidden></div>
   </details>
 
   <details>

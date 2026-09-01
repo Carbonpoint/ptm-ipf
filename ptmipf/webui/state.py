@@ -96,6 +96,43 @@ def _parse_reference(spec, result: IPFResult):
     return np.asarray(spec, dtype=float)
 
 
+def _clean_columns(spec) -> dict | None:
+    """Normalise the orientation column mapping arriving from the browser."""
+    if not spec:
+        return None
+    quaternion = spec.get("quaternion")
+    if isinstance(quaternion, str):
+        quaternion = [quaternion]
+    quaternion = [str(name) for name in (quaternion or []) if str(name).strip()]
+    cleaned = {
+        "quaternion": quaternion,
+        "order": str(spec.get("order") or "xyzw").lower(),
+        "conjugate": bool(spec.get("conjugate")),
+    }
+    for name in ("structure_type", "rmsd", "structure"):
+        value = str(spec.get(name) or "").strip()
+        if value:
+            cleaned[name] = value
+    return cleaned
+
+
+#: What each stage of an analysis covers on the progress bar, in order, with
+#: the quantity its duration scales with.  OVITO reports nothing while it is
+#: working, so the bar is interpolated inside a stage from elapsed time against
+#: a throughput estimate.  That makes it an estimate and it is labelled as one.
+STAGES = (
+    ("reading the configuration", 0.00, 0.15, "read"),
+    ("polyhedral template matching", 0.15, 0.90, "ptm"),
+    ("colouring the orientations", 0.90, 1.00, "colour"),
+)
+
+#: Deliberately pessimistic starting throughputs: bytes a second for the read,
+#: atoms a second for the other two.  A bar that runs behind and then completes
+#: reads better than one that sits at 99 per cent, and the first real run
+#: replaces these anyway.
+_SEED_RATES = {"read": 4.0e7, "ptm": 2.5e5, "colour": 5.0e5}
+
+
 class AppState:
     """Cached analysis result, selection and job status behind one lock."""
 
@@ -115,6 +152,9 @@ class AppState:
         self.generation = 0  # bumped on every visible change, used for cache busting
         self._fill_cache: tuple | None = None  # (radius, min_neighbours, generation)
         self._diagnostics: dict | None = None  # probed once, on first request
+        # Throughput used to turn stage boundaries into a percentage, refined
+        # from every run this process completes; see _stage_progress.
+        self._rates = dict(_SEED_RATES)
 
     # ------------------------------------------------------------------
     # paths
@@ -138,6 +178,10 @@ class AppState:
             "structures": tuple(params.get("structures") or DEFAULT_STRUCTURES),
             "rmsd_cutoff": float(params.get("rmsd_cutoff", 0.1)),
             "frame_index": int(params.get("frame_index", 0)),
+            # A column mapping means the orientations are already in the file
+            # and PTM is skipped; it belongs with the settings that force a
+            # re-read, because changing the mapping changes every orientation.
+            "columns": _clean_columns(params.get("columns")),
         }
         colour = {
             "direction": params.get("direction", "z"),
@@ -156,6 +200,8 @@ class AppState:
         analysis["path"] = str(path)
         for name in analysis["structures"]:
             get_structure(name)  # fail early on typos
+        if analysis["columns"] and not analysis["columns"].get("quaternion"):
+            raise ValueError("choose the column or columns that hold the quaternion")
 
         with self.lock:
             if self.job["state"] == "running":
@@ -163,33 +209,54 @@ class AppState:
             if self.result is not None and analysis == self.analysis_params:
                 self._recolour(colour)
                 return {"accepted": True, "recoloured": True}
+            now = time.time()
             self.job = {
                 "state": "running",
-                "stage": "running polyhedral template matching",
+                "stage": STAGES[0][0],
                 "error": "",
-                "started": time.time(),
+                "started": now,
+                "stage_index": 0,
+                "stage_started": now,
+                "stage_expected": max(0.2, path.stat().st_size / self._rates["read"]),
+                "file_bytes": path.stat().st_size,
+                "n_atoms": 0,
+                "progress": 0.0,
             }
             self.ovito.submit(self._run_analysis, analysis, colour)
             return {"accepted": True, "recoloured": False}
 
     def _run_analysis(self, analysis: dict, colour: dict) -> None:
-        from ..analysis import analyse
+        from ..analysis import analyse, analyse_orientations
 
         try:
             frame = SampleFrame(colour["axes"])
-            result = analyse(
-                analysis["path"],
-                direction=colour["direction"],
-                structures=analysis["structures"],
-                frame=frame,
-                frame_index=analysis["frame_index"],
-                rmsd_cutoff=analysis["rmsd_cutoff"],
-                other_color=colour["other_color"],
-                only=colour["color_only"],
-            )
+            common = {
+                "direction": colour["direction"],
+                "structures": analysis["structures"],
+                "frame": frame,
+                "frame_index": analysis["frame_index"],
+                "other_color": colour["other_color"],
+                "only": colour["color_only"],
+            }
+            if analysis["columns"]:
+                self._stage_started(STAGES[0][0])
+                result = analyse_orientations(
+                    analysis["path"], analysis["columns"], **common
+                )
+                self._stage_started(STAGES[2][0])
+            else:
+                result = analyse(
+                    analysis["path"],
+                    rmsd_cutoff=analysis["rmsd_cutoff"],
+                    progress=self._stage_started,
+                    **common,
+                )
         except Exception as exc:  # surfaced through /api/status, not a traceback
             with self.lock:
-                self.job = {"state": "error", "stage": "", "error": str(exc), "started": 0.0}
+                self.job = {
+                    "state": "error", "stage": "", "error": str(exc),
+                    "started": 0.0, "progress": 0.0,
+                }
             return
         with self.lock:
             self.result = result
@@ -197,8 +264,60 @@ class AppState:
             self.colour_params = colour
             self.selection_mask = None
             self.selection_criteria = []
-            self.job = {"state": "done", "stage": "", "error": "", "started": 0.0}
+            self.job = {
+                "state": "done", "stage": "", "error": "", "started": 0.0, "progress": 1.0
+            }
             self.generation += 1
+
+    def _stage_started(self, stage: str, n_atoms: int | None = None) -> None:
+        """Record a stage boundary, and learn from the stage that just ended."""
+        with self.lock:
+            job = self.job
+            if job.get("state") != "running":
+                return
+            now = time.time()
+            index = next((i for i, s in enumerate(STAGES) if s[0] == stage), 0)
+            previous = job.get("stage_index")
+            if previous is not None and previous < index:
+                self._learn_rate(STAGES[previous][3], now - job["stage_started"], job)
+            expected = 0.2
+            if n_atoms:
+                key = STAGES[index][3]
+                expected = max(0.2, n_atoms / self._rates.get(key, 1e6))
+            job.update(
+                stage=stage,
+                stage_index=index,
+                stage_started=now,
+                stage_expected=expected,
+                n_atoms=int(n_atoms or job.get("n_atoms") or 0),
+                progress=STAGES[index][1],
+            )
+
+    def _learn_rate(self, key: str, seconds: float, job: dict) -> None:
+        """Fold one completed stage into the throughput estimate.
+
+        A running mean rather than a replacement, so one unlucky stage (a cold
+        file cache, another job on the machine) does not throw the next bar off.
+        """
+        # The read is sized in bytes and the rest in atoms; the rate carries
+        # whichever unit its own stage is measured in.
+        amount = job.get("file_bytes", 0) if key == "read" else (job.get("n_atoms") or 0)
+        if amount <= 0 or seconds <= 0.05:
+            return
+        observed = amount / seconds
+        self._rates[key] = 0.5 * self._rates.get(key, observed) + 0.5 * observed
+
+    def _stage_progress(self, job: dict, now: float) -> float:
+        """Interpolate inside the current stage from elapsed time.
+
+        Capped just short of the end of its band so the bar never claims a stage
+        is finished while it is still running.
+        """
+        index = job.get("stage_index", 0)
+        _, base, top, _ = STAGES[min(index, len(STAGES) - 1)]
+        expected = max(job.get("stage_expected", 1.0), 1e-6)
+        fraction = min((now - job.get("stage_started", now)) / expected, 0.97)
+        return round(min(1.0, base + (top - base) * max(fraction, 0.0)), 3)
 
     def _recolour(self, colour: dict) -> None:
         """Recompute colours in place from the cached orientations.
@@ -255,9 +374,15 @@ class AppState:
         with self.lock:
             payload = dict(self.job)
             if payload["state"] == "running":
-                payload["elapsed"] = round(time.time() - payload.pop("started"), 1)
+                now = time.time()
+                payload["progress"] = self._stage_progress(self.job, now)
+                payload["elapsed"] = round(now - payload.pop("started"), 1)
+                remaining = payload["stage_expected"] - (now - payload["stage_started"])
+                payload["stage_remaining"] = round(max(remaining, 0.0), 1)
             else:
                 payload.pop("started")
+            for key in ("stage_started", "stage_expected", "stage_index", "file_bytes"):
+                payload.pop(key, None)
             payload["generation"] = self.generation
             if self.result is not None:
                 result = self.result

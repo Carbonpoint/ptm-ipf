@@ -172,6 +172,55 @@ through colour space while the IPF colours cover a two-dimensional patch of it, 
 IPF colours simply are not on the curve. For a full IPF map the error is large enough to
 change which grain looks like which, so it is worth the extra file to load the custom map.
 
+### Something to try it on
+
+`ptmipf-example` writes a complete small study: a random polycrystal, its EAM
+potential fetched from the
+[NIST Interatomic Potentials Repository](https://www.ctcms.nist.gov/potentials/),
+and a LAMMPS input that compresses it.
+
+```bash
+ptmipf-example Cu                 # or Al, Ni, Fe
+cd examples/cu_6grain_compression
+lmp -in in.compression            # about 90 s on four cores
+ptmipf compression.dump --structures fcc --direction z --legend key.png
+```
+
+The geometry is built by [atomsk](https://atomsk.univ-lille.fr), which is not a
+Python package and does not arrive with `pip install`: get it from
+<https://atomsk.univ-lille.fr/dl.php>, which has Linux, macOS and Windows
+binaries, and put it on the PATH or point `PTMIPF_ATOMSK` at it. `--builder
+voronoi` uses a built-in NumPy fallback instead, and everything it writes says
+so, because a builder that leaves the grain boundaries too open softens the
+elastic response and brings yield forward. That is not a hypothetical: rebuilding
+the iron runs of the showcase campaign on atomsk moved the peak stress of a
+random cell from 4.99 to 5.94 GPa.
+
+The same thing is a button on the web interface's *Examples* page.
+
+### Orientations from somewhere else
+
+A configuration another OVITO session has already run PTM on carries the
+quaternions, so there is no reason to run PTM again:
+
+```python
+from ptmipf.analysis import analyse_orientations, list_columns
+
+print(list_columns("from_elsewhere.dump")["columns"])
+result = analyse_orientations(
+    "from_elsewhere.dump",
+    {"quaternion": ["qw", "qx", "qy", "qz"], "order": "wxyz", "structure_type": "phase"},
+    direction="z",
+)
+```
+
+`quaternion` takes one four-component column or four scalar ones, and `order` is
+`xyzw` (OVITO's own, and the default) or `wxyz`. Set `conjugate` for a file that
+stores the sample to crystal rotation. Nothing in a file states either of those,
+and both differ from their opposite by a transpose, which turns an IPF map into a
+plausible looking but wrong one, so neither is guessed. The web interface has the
+same thing as a column mapping panel with the file's real column names in it.
+
 ### Sections
 
 A slab a few atomic layers thick, viewed down its normal, is the atomistic equivalent of an

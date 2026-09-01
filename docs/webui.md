@@ -75,6 +75,22 @@ header):
   to 0 and 1, and switching the input property between `ipf_x`, `ipf_y` and
   `ipf_z` switches between the three IPF maps inside OVITO, with no re-export.
   The selection exports the same way.
+* **Progress while PTM runs**: the status line carries an approximate
+  percentage and a bar. OVITO reports nothing while it is working, so the
+  percentage is interpolated inside each of the three stages (reading the file,
+  matching, colouring) from a throughput the server calibrates on the runs it
+  has already done. It is an estimate, and the wording says so; what it is good
+  for is telling a long run apart from a stuck one.
+* **Orientations already in the file**: for a configuration another OVITO
+  session has run PTM on, name the columns that hold the quaternions and they
+  are coloured directly, with no second PTM run. The panel reads the file's
+  actual columns and offers a guess, and asks for the two things no file states:
+  the component order (`x, y, z, w` as OVITO writes it, or `w, x, y, z` as most
+  other tools do) and whether the rotation is crystal to sample or the other way
+  round. Those two differ by a transpose, which turns an IPF map into a
+  plausible looking but wrong one, so they are asked rather than guessed. A
+  structure type column is read with OVITO's own PTM codes; without one, every
+  atom carrying an orientation is taken as a single named phase.
 * **Reproducibility**: the *CLI command* button prints the `ptmipf` command
   line, selection flags included, that reproduces the current session, so
   interactive exploration turns directly into a scriptable analysis. It can be
@@ -99,6 +115,46 @@ Rendering is done by OVITO on the server from the cached analysis result, so
 orbiting the view never re-runs PTM, and what the browser shows is what
 `ptmipf --render` writes. All plots are produced by the same functions as the
 CLI, which keeps the two front ends pixel-identical.
+
+## The examples page
+
+The *Examples* button in the header opens a page that builds something to look
+at. Pick copper, aluminium, nickel or iron and it will:
+
+1. build a periodic cube of randomly oriented grains with
+   [atomsk](https://atomsk.univ-lille.fr),
+2. download the matching EAM potential from the
+   [NIST Interatomic Potentials Repository](https://www.ctcms.nist.gov/potentials/),
+   checking it against a recorded checksum,
+3. write a LAMMPS input that compresses the cube along z, plus the grain
+   orientations it built and a README,
+
+all into `<served root>/examples/<element>_<n>grain_compression/`. Nothing is
+run for you. The page quotes the cost before you ask for it and again
+afterwards: the defaults are about 8,600 atoms and 22,000 steps, which took
+1 minute 34 seconds on four cores of a workstation and will take a few minutes
+on a laptop.
+
+Then `lmp -in in.compression`, and open `compression.dump` back in the
+interface. On the reference copper run the hcp fraction goes from 3.7 per cent
+at zero strain to 15.4 per cent at ten per cent compression: stacking faults and
+twin boundaries appearing between the grains, which is exactly what an IPF map
+of a deformed fcc metal is for.
+
+The same thing from the terminal:
+
+```bash
+ptmipf-example Cu --root . --grains 6 --box 48
+ptmipf-example Fe --strain 0.15 --builder auto
+```
+
+atomsk is not a Python package and will not arrive with `pip install`. Install
+it from <https://atomsk.univ-lille.fr/dl.php>, which has binaries for Linux,
+macOS and Windows, and put it on the PATH or point `PTMIPF_ATOMSK` at it. Without
+it the page falls back to a built-in NumPy Voronoi builder and says so, on the
+page and in the README it writes. The fallback reaches about 97 per cent of
+single-crystal density against atomsk's 97.4 on the same cell, which is close,
+but "close" is not something to quote in a paper without saying which one ran.
 
 ## When the 3D view stays empty
 

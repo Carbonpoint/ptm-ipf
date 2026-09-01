@@ -290,3 +290,89 @@ dialog h2 { margin-top: 0; font-size: 1rem; }
   resize: vertical;
 }
 #cmd-import textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+/* --- progress --------------------------------------------------------- */
+#analysis-progress {
+  width: 100%;
+  height: 5px;
+  margin-top: 0.4rem;
+  appearance: none;
+  border: none;
+  background: var(--hover);
+  border-radius: 3px;
+  overflow: hidden;
+}
+#analysis-progress::-webkit-progress-bar { background: var(--hover); }
+#analysis-progress::-webkit-progress-value {
+  background: var(--accent);
+  transition: width 0.3s linear;
+}
+#analysis-progress::-moz-progress-bar { background: var(--accent); }
+
+/* --- column mapping --------------------------------------------------- */
+#column-map { margin-top: 0.5rem; display: grid; gap: 0.35rem; }
+#column-map select { width: 100%; }
+#column-map .quad { display: grid; grid-template-columns: 1fr 1fr; gap: 0.3rem; }
+#column-map .warn { color: #b06a1e; font-size: 0.8rem; }
+
+/* --- examples page ---------------------------------------------------- */
+.examples-page {
+  max-width: 62rem;
+  margin: 0 auto;
+  padding: 1rem;
+  display: grid;
+  gap: 0.9rem;
+}
+.examples-page .card { padding: 1rem 1.2rem; }
+.examples-page h2 { margin-top: 0; font-size: 1rem; }
+.catalogue {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0.8rem;
+  margin-top: 0.8rem;
+}
+.example {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.example h3 { margin: 0; font-size: 0.95rem; }
+.example button { margin-top: auto; }
+.settings { display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: center; }
+.settings input { width: 5.5rem; }
+.banner {
+  border: 1px solid var(--border);
+  border-left: 3px solid #b06a1e;
+  border-radius: 6px;
+  padding: 0.6rem 0.8rem;
+  margin: 0.6rem 0;
+  font-size: 0.85rem;
+}
+table.kv { border-collapse: collapse; margin: 0.6rem 0; width: 100%; }
+table.kv th {
+  text-align: left;
+  vertical-align: top;
+  color: var(--muted);
+  font-weight: normal;
+  padding: 0.2rem 0.8rem 0.2rem 0;
+  white-space: nowrap;
+}
+table.kv td { padding: 0.2rem 0; }
+.steps { margin: 0.6rem 0; padding-left: 1.2rem; }
+.steps li { margin-bottom: 0.5rem; }
+.steps pre, .examples-page pre {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 0.7rem;
+  overflow-x: auto;
+  font-size: 0.8rem;
+}
+a.button {
+  display: inline-block;
+  text-decoration: none;
+  line-height: 1.6;
+}

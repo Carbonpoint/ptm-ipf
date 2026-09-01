@@ -19,6 +19,7 @@ const state = {
   criteria: [],
   atomInfo: null,
   command: null,       // last /api/command payload, for the one-line copy
+  columns: null,       // the file's columns and the mapping controls built from them
 };
 
 /* ------------------------------------------------------------------ */
@@ -70,6 +71,7 @@ function analysisParams() {
     structures: structures.length ? structures : undefined,
     rmsd_cutoff: parseFloat($("rmsd").value) || 0,
     frame_index: parseInt($("frame-index").value, 10) || 0,
+    columns: columnMapping(),
   };
 }
 
@@ -134,19 +136,40 @@ function pollUntilDone() {
     try {
       const status = await api("/api/status");
       if (status.state === "running") {
-        setStatus(`${status.stage}… ${status.elapsed.toFixed(0)} s`, "busy");
+        showProgress(status);
         return;
       }
       clearInterval(timer);
       state.running = false;
+      showProgress(null);
       if (status.state === "error") { setStatus("analysis failed: " + status.error, "error"); return; }
       applyStatus(status);
     } catch (error) {
       clearInterval(timer);
       state.running = false;
+      showProgress(null);
       setStatus(error.message, "error");
     }
   }, 500);
+}
+
+/* OVITO says nothing while it works, so the server interpolates the bar inside
+ * each stage from a throughput it calibrates on earlier runs.  That makes the
+ * number an estimate, and the wording says so rather than implying a
+ * measurement. */
+function showProgress(status) {
+  const bar = $("analysis-progress");
+  if (!status) { bar.hidden = true; bar.value = 0; return; }
+  const fraction = typeof status.progress === "number" ? status.progress : 0;
+  bar.hidden = false;
+  bar.value = fraction;
+  const percent = Math.round(100 * fraction);
+  const left = status.stage_remaining > 1
+    ? `, about ${Math.ceil(status.stage_remaining)} s left in this step`
+    : "";
+  setStatus(
+    `${status.stage}… roughly ${percent}%${left} (${status.elapsed.toFixed(0)} s so far)`,
+    "busy");
 }
 
 async function refreshStatus() {
@@ -731,6 +754,148 @@ const debouncedView = debounce(refreshView, 250);
 const debouncedFigures = debounce(refreshFigures, 400);
 
 /* ------------------------------------------------------------------ */
+/* orientations that are already in the file                          */
+/* ------------------------------------------------------------------ */
+/* A configuration another OVITO session has run PTM on already carries the
+ * quaternions.  Mapping the columns skips PTM entirely, which is both faster
+ * and the only way to colour a file whose orientations came from settings this
+ * server does not know about.
+ *
+ * Nothing in a file states its quaternion convention, and the two common ones
+ * differ by a transpose, which turns an IPF map into a plausible looking but
+ * wrong one.  So the convention is asked for, never guessed, and the guess the
+ * server offers is only for the column names. */
+function columnControls() {
+  return state.columns ? state.columns.controls : null;
+}
+
+function columnMapping() {
+  const controls = columnControls();
+  if (!$("use-columns").checked || !controls) return null;
+  const quaternion = controls.single.value === "__four__"
+    ? controls.quad.map((select) => select.value)
+    : [controls.single.value];
+  if (quaternion.some((name) => !name)) return null;
+  const mapping = {
+    quaternion,
+    order: controls.order.value,
+    conjugate: controls.conjugate.checked,
+  };
+  if (controls.structureType.value) {
+    mapping.structure_type = controls.structureType.value;
+  } else {
+    mapping.structure = controls.structure.value;
+  }
+  if (controls.rmsd.value) mapping.rmsd = controls.rmsd.value;
+  return mapping;
+}
+
+function labelledSelect(parent, text, options, selected, title) {
+  const label = document.createElement("label");
+  label.className = "inline";
+  label.textContent = text;
+  if (title) label.title = title;
+  const select = document.createElement("select");
+  for (const [value, name] of options) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = name;
+    if (value === selected) option.selected = true;
+    select.append(option);
+  }
+  label.append(select);
+  parent.append(label);
+  return select;
+}
+
+async function readColumns() {
+  const path = $("path").value.trim();
+  const note = $("columns-status");
+  if (!path) { note.textContent = "choose a configuration file first"; return; }
+  note.textContent = "reading...";
+  note.className = "muted";
+  try {
+    const info = await api("/api/columns?path=" + encodeURIComponent(path) +
+                           "&frame=" + (parseInt($("frame-index").value, 10) || 0));
+    buildColumnMap(info);
+    note.textContent = `${info.columns.length} columns, ` +
+                       `${info.n_atoms.toLocaleString()} atoms`;
+  } catch (error) {
+    note.textContent = error.message;
+    note.className = "error-text";
+    $("column-map").hidden = true;
+    state.columns = null;
+  }
+}
+
+function buildColumnMap(info) {
+  const box = $("column-map");
+  box.replaceChildren();
+  const scalars = info.columns.filter((c) => c.components === 1);
+  const quads = info.columns.filter((c) => c.components === 4);
+  const guess = info.guess || {};
+  const guessed = guess.quaternion || [];
+
+  const quaternionOptions = [
+    ...quads.map((c) => [c.name, `${c.name} (4 components)`]),
+    ["__four__", "four separate columns..."],
+  ];
+  const single = labelledSelect(box, "quaternion ", quaternionOptions,
+    guessed.length === 1 ? guessed[0] : "__four__",
+    "One four-component column, or four scalar columns");
+
+  const quad = [];
+  const quadBox = document.createElement("div");
+  quadBox.className = "quad";
+  const scalarOptions = [["", "..."], ...scalars.map((c) => [c.name, c.name])];
+  for (let i = 0; i < 4; i += 1) {
+    quad.push(labelledSelect(quadBox, "", scalarOptions, guessed[i] || ""));
+  }
+  box.append(quadBox);
+
+  const order = labelledSelect(box, "component order ",
+    [["xyzw", "x, y, z, w  (OVITO)"], ["wxyz", "w, x, y, z"]], "xyzw",
+    "OVITO writes the scalar part last; most other tools write it first");
+
+  const conjugateLabel = document.createElement("label");
+  conjugateLabel.className = "inline";
+  conjugateLabel.title = "Tick this if the file stores the sample to crystal rotation";
+  const conjugate = document.createElement("input");
+  conjugate.type = "checkbox";
+  conjugateLabel.append(conjugate, " invert the sense (sample to crystal)");
+  box.append(conjugateLabel);
+
+  const structureType = labelledSelect(box, "structure column ",
+    [["", "none, one phase for all"], ...scalars.map((c) => [c.name, c.name])],
+    guess.structure_type || "",
+    "A structure type column is read with OVITO's own PTM codes");
+  const structure = labelledSelect(box, "phase ",
+    (state.meta.structures || []).filter((s) => s.colorable).map((s) => [s.name, s.name]),
+    state.dominant || "fcc");
+  const rmsd = labelledSelect(box, "RMSD column ",
+    [["", "none"], ...scalars.map((c) => [c.name, c.name])], guess.rmsd || "");
+
+  const warning = document.createElement("p");
+  warning.className = "warn";
+  warning.textContent = "Check the result against a grain you know. The wrong component " +
+    "order or sense gives a map that looks right and is not.";
+  box.append(warning);
+
+  state.columns = {
+    info,
+    controls: { single, quad, quadBox, order, conjugate, structureType, structure, rmsd },
+  };
+  const sync = () => {
+    quadBox.hidden = single.value !== "__four__";
+    structure.parentElement.hidden = Boolean(structureType.value);
+  };
+  single.addEventListener("change", sync);
+  structureType.addEventListener("change", sync);
+  sync();
+  box.hidden = false;
+}
+
+/* ------------------------------------------------------------------ */
 /* the command line: copy, save, and read one back                     */
 /* ------------------------------------------------------------------ */
 function updateColorMapLink() {
@@ -908,8 +1073,21 @@ async function init() {
     $("selection-ui").hidden = true;
   }
   if (state.meta.initial_path) $("path").value = state.meta.initial_path;
+  // The examples page hands a freshly built structure over this way.
+  const wanted = new URLSearchParams(location.search).get("path");
+  if (wanted) $("path").value = wanted;
 
   $("analyse").addEventListener("click", () => runAnalysis(true));
+  $("read-columns").addEventListener("click", readColumns);
+  $("use-columns").addEventListener("change", () => {
+    const on = $("use-columns").checked;
+    if (on) {
+      $("columns-section").open = true;
+      if (!state.columns) readColumns();
+    }
+    // PTM's own settings do nothing once the orientations come from the file.
+    $("rmsd").disabled = on;
+  });
   $("browse").addEventListener("click", () => openBrowser(""));
   $("browser-close").addEventListener("click", () => $("browser-dialog").close());
   $("path").addEventListener("keydown", (e) => { if (e.key === "Enter") runAnalysis(true); });

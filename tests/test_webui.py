@@ -359,6 +359,160 @@ def test_export_can_leave_the_columns_out(base, analysed):
     assert "ipf_" not in body.decode()
 
 
+def test_progress_advances_through_the_stages(base, served_dir):
+    """OVITO reports nothing while it works, so the bar is an interpolation.
+
+    What can be checked is that it is monotonic, stays inside [0, 1], names the
+    stage it is in, and ends at one.
+    """
+    outcome = _post_json(base, "/api/analyse", {"path": "crystal.xyz", "structures": ["hcp"]})
+    assert outcome["accepted"]
+    seen, stages, deadline = [], set(), time.time() + 120
+    while time.time() < deadline:
+        status = _get_json(base, "/api/status")
+        if status["state"] != "running":
+            break
+        assert 0.0 <= status["progress"] <= 1.0
+        assert status["stage"]
+        seen.append(status["progress"])
+        stages.add(status["stage"])
+        time.sleep(0.05)
+    assert status["state"] == "done", status.get("error")
+    assert status["progress"] == 1.0
+    assert seen == sorted(seen), f"the bar went backwards: {seen}"
+    assert stages, "no stage was ever reported"
+
+
+def test_columns_are_offered_for_a_file_with_orientations(base, served_dir):
+    """The mapping is chosen from what the file has, not from what it might have."""
+    info = _get_json(base, "/api/columns?path=crystal.xyz")
+    names = {c["name"]: c["components"] for c in info["columns"]}
+    assert names["Position"] == 3
+    assert info["n_atoms"] > 0
+    assert "guess" in info
+
+
+def test_columns_refuse_a_path_outside_the_root(base):
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        _get(base, "/api/columns?path=../../etc/passwd")
+    assert caught.value.code == 403
+
+
+@pytest.fixture(scope="module")
+def foreign_file(served_dir):
+    """The served crystal, written out the way another session would write it.
+
+    Orientations in four separate columns with names nothing recognises and the
+    scalar part first, which is the case this feature exists for.
+    """
+    from ovito.io import import_file
+    from ovito.modifiers import PolyhedralTemplateMatchingModifier as Ptm
+
+    pipeline = import_file(str(served_dir / "crystal.xyz"))
+    pipeline.modifiers.append(Ptm(output_orientation=True, rmsd_cutoff=0.1))
+    data = pipeline.compute(0)
+    positions = np.asarray(data.particles.positions[...])
+    quaternions = np.asarray(data.particles["Orientation"][...])
+    types = np.asarray(data.particles["Structure Type"][...])
+
+    path = served_dir / "foreign.dump"
+    with open(path, "w") as handle:
+        handle.write(f"ITEM: TIMESTEP\n0\nITEM: NUMBER OF ATOMS\n{len(positions)}\n")
+        handle.write("ITEM: BOX BOUNDS pp pp pp\n")
+        low, high = positions.min(axis=0), positions.max(axis=0)
+        for axis in range(3):
+            handle.write(f"{low[axis] - 1:.6f} {high[axis] + 1:.6f}\n")
+        handle.write("ITEM: ATOMS id type x y z phase qw qx qy qz\n")
+        for i, (x, y, z) in enumerate(positions, start=1):
+            q = quaternions[i - 1]
+            handle.write(
+                f"{i} 1 {x:.5f} {y:.5f} {z:.5f} {int(types[i - 1])} "
+                f"{q[3]:.8f} {q[0]:.8f} {q[1]:.8f} {q[2]:.8f}\n"
+            )
+    return "foreign.dump"
+
+
+def _analyse_and_wait(base, payload):
+    outcome = _post_json(base, "/api/analyse", payload)
+    assert outcome["accepted"], outcome
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        status = _get_json(base, "/api/status")
+        if status["state"] != "running":
+            return status
+        time.sleep(0.1)
+    pytest.fail("the analysis did not finish")
+
+
+def test_analysing_from_columns_matches_a_real_ptm_run(base, foreign_file):
+    """The whole point: the imported map is the same map PTM produced."""
+    reference = _analyse_and_wait(
+        base, {"path": "crystal.xyz", "structures": ["hcp"], "direction": "z"}
+    )["result"]
+
+    info = _get_json(base, "/api/columns?path=" + foreign_file)
+    names = {c["name"] for c in info["columns"]}
+    assert {"qw", "qx", "qy", "qz", "phase"} <= names
+    assert info["guess"]["structure_type"] == "phase"
+
+    imported = _analyse_and_wait(base, {
+        "path": foreign_file,
+        "structures": ["hcp"],
+        "direction": "z",
+        "columns": {
+            "quaternion": ["qw", "qx", "qy", "qz"],
+            "order": "wxyz",
+            "structure_type": "phase",
+        },
+    })["result"]
+    assert imported["counts"] == reference["counts"]
+    assert imported["n_atoms"] == reference["n_atoms"]
+
+
+def test_a_mapping_naming_a_column_that_is_not_there_is_reported(base, foreign_file):
+    status = _analyse_and_wait(base, {
+        "path": foreign_file,
+        "structures": ["hcp"],
+        "columns": {"quaternion": "Orientation"},
+    })
+    assert status["state"] == "error"
+    assert "Orientation" in status["error"]
+
+
+def test_a_column_mapping_without_a_quaternion_is_refused(base, served_dir):
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        _post_json(base, "/api/analyse", {
+            "path": "crystal.xyz", "columns": {"order": "xyzw"}
+        })
+    assert caught.value.code == 400
+    assert "quaternion" in json.loads(caught.value.read())["error"]
+
+
+def test_the_examples_catalogue_quotes_a_cost(base):
+    catalogue = _get_json(base, "/api/examples")
+    assert catalogue["examples"]
+    for entry in catalogue["examples"]:
+        assert entry["citation"] and entry["url"].startswith("https://")
+        assert entry["estimate"]["n_atoms"] > 0
+        assert entry["estimate"]["minutes_one_core"] > entry["estimate"]["minutes_four_cores"]
+    # Whether atomsk is here decides which builder the page offers.
+    assert "atomsk" in catalogue and "atomsk_help" in catalogue
+
+
+def test_the_examples_page_is_served(base):
+    status, headers, body = _get(base, "/examples")
+    assert status == 200
+    assert b"<title>ptm-ipf examples</title>" in body
+    assert "text/html" in headers["Content-Type"]
+
+
+def test_building_an_example_refuses_settings_that_would_not_run(base):
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        _post_json(base, "/api/examples/build", {"element": "Cu", "box": 5.0})
+    assert caught.value.code == 400
+    assert "box" in json.loads(caught.value.read())["error"]
+
+
 def test_diagnostics_report_what_the_installation_can_do(base):
     """A blank 3D view is a server-side renderer problem; this is where it shows."""
     report = _get_json(base, "/api/diagnostics")
