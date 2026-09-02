@@ -10,7 +10,10 @@
 <body>
 <header>
   <h1>ptm-ipf <span id="version" class="muted"></span></h1>
-  <span id="status" class="status">idle</span>
+  <span id="status-box" class="status-box">
+    <span id="status" class="status">idle</span>
+    <progress id="header-progress" max="1" value="0" hidden></progress>
+  </span>
   <button id="cmd-button" class="ghost" title="Show the equivalent ptmipf command line" disabled>CLI command</button>
   <a class="ghost button" href="/examples" title="Build a small polycrystal and a LAMMPS run to try this on">Examples</a>
   <button id="theme-toggle" class="ghost" title="Toggle light/dark theme">◐</button>
@@ -28,7 +31,19 @@
       </span>
     </label>
     <label class="inline">Trajectory frame <input id="frame-index" type="number" value="0" min="0"></label>
-    <button id="analyse" class="primary">Analyse</button>
+    <div id="series-nav" class="series-nav" hidden>
+      <span class="row">
+        <button id="series-prev" class="small" title="previous frame of the series">&#9664;</button>
+        <select id="series-select" title="the frames this file belongs to"></select>
+        <button id="series-next" class="small" title="next frame of the series">&#9654;</button>
+      </span>
+      <span id="series-info" class="hint"></span>
+    </div>
+    <span class="row">
+      <button id="analyse" class="primary">Analyse</button>
+      <button id="analyse-slice" class="small" disabled
+        title="Run the analysis on the atoms in the slice only (set a slice in the 3D view first). Faster, and every later figure works on the slice alone.">Analyse slice</button>
+    </span>
     <progress id="analysis-progress" max="1" value="0" hidden></progress>
     <div id="summary" class="summary" hidden>
       <div id="summary-head"></div>
@@ -61,16 +76,6 @@
     <div id="column-map" hidden></div>
   </details>
 
-  <details>
-    <summary>Sample frame</summary>
-    <p class="hint">Define named axes in cell coordinates, e.g. <code>1,0,0</code>. Missing axes are
-    completed to a right-handed triad.</p>
-    <label class="inline">RD <input id="axis-rd" type="text" placeholder="1,0,0" spellcheck="false"></label>
-    <label class="inline">TD <input id="axis-td" type="text" placeholder="0,1,0" spellcheck="false"></label>
-    <label class="inline">ND <input id="axis-nd" type="text" placeholder="0,0,1" spellcheck="false"></label>
-    <label class="inline">ED <input id="axis-ed" type="text" placeholder="unset" spellcheck="false"></label>
-  </details>
-
   <details open>
     <summary>Boundary filling</summary>
     <label class="inline"><input id="fill-on" type="checkbox"> fill unindexed atoms</label>
@@ -99,7 +104,30 @@
       <button data-dir="ed" class="small">ED</button>
     </div>
     <label class="inline">Direction <input id="direction" type="text" value="z" spellcheck="false"
-      title="An axis (+z, -x), a named sample axis (rd, td, nd, ed) or a vector (1,1,0)"></label>
+      data-vector title="An axis (+z, -x), a named sample axis (rd, td, nd, ed) or a vector (1,1,0)"></label>
+  </details>
+
+  <details>
+    <summary>Sample frame (RD, TD, ND)</summary>
+    <p class="hint">Assign a specific direction, in cell coordinates, to each named sample
+    axis, e.g. RD = <code>1,0,0</code>. Missing axes are completed to a right-handed triad.
+    The named axes are what the IPF direction, the pole figure axes and the triad refer to.</p>
+    <label class="inline">RD <input id="axis-rd" type="text" placeholder="1,0,0" spellcheck="false" data-vector></label>
+    <label class="inline">TD <input id="axis-td" type="text" placeholder="0,1,0" spellcheck="false" data-vector></label>
+    <label class="inline">ND <input id="axis-nd" type="text" placeholder="0,0,1" spellcheck="false" data-vector></label>
+    <label class="inline">ED <input id="axis-ed" type="text" placeholder="unset" spellcheck="false" data-vector></label>
+  </details>
+
+  <details>
+    <summary>System rotation</summary>
+    <p class="hint">Turn the whole system, atoms and orientations together, about the cell
+    centre. Rotations are applied in order, each about an axis of the fixed sample frame.
+    Changing one recolours without running PTM again.</p>
+    <div id="rotations"></div>
+    <span class="row">
+      <button id="add-rotation" class="small">+ add rotation</button>
+      <button id="clear-rotations" class="small ghost">clear</button>
+    </span>
   </details>
 
   <details open>
@@ -171,16 +199,23 @@
 <main>
   <section class="card viewer-card">
     <div class="card-head">
-      <h2>IPF map <span id="view-label" class="muted"></span></h2>
-      <span class="row">
+      <h2>3D IPF map <span id="view-label" class="muted"></span></h2>
+      <span class="row wrap">
         <label class="inline"><input id="hide-other" type="checkbox"> hide other</label>
         <label class="inline"><input id="tripod" type="checkbox"> triad</label>
+        <button id="tripod-advanced-toggle" class="small ghost" title="triad labels, size and position">&#9881;</button>
         <label class="inline"><input id="slice-on" type="checkbox"> slice</label>
-        <input id="slice-axis" type="text" value="z" size="4" spellcheck="false" title="slice plane normal">
+        <input id="slice-axis" type="text" value="z" size="4" spellcheck="false" data-vector
+               title="slice plane normal: an axis, a named sample axis or a vector">
         <input id="slice-frac" type="range" min="0" max="100" value="60" title="slice position">
-        <input id="slice-width" type="number" min="0" step="1" value="0" size="4"
-               title="slab thickness in angstroms; 0 cuts the cell in half">
+        <input id="slice-distance" type="number" step="0.5" class="slice-number"
+               title="slice plane position along the normal, in angstroms">
         <span class="muted small-unit">&#8491;</span>
+        <label class="inline" title="slab thickness in angstroms; 0 shows everything up to the plane">
+          width <input id="slice-width" type="number" min="0" step="1" value="0" size="4"></label>
+        <span class="muted small-unit">&#8491;</span>
+        <label class="inline" title="Draw the pole figures, the IPF density and the IPF map from the slice as well">
+          <input id="slice-figures" type="checkbox" checked> figures too</label>
         <span class="row" title="View along an axis, orthographically">
           <button id="view-x" class="small">X</button>
           <button id="view-y" class="small">Y</button>
@@ -190,26 +225,55 @@
         <a id="download-view" class="small button" title="Download this view as PNG" download>PNG</a>
       </span>
     </div>
+    <div id="tripod-advanced" class="advanced" hidden>
+      <span class="row wrap">
+        <label class="inline">labels
+          <select id="tripod-mode">
+            <option value="sample">RD / TD / ND</option>
+            <option value="cell">x / y / z</option>
+            <option value="custom">custom</option>
+          </select></label>
+        <span id="tripod-custom" class="row wrap" hidden>
+          <input id="tripod-axis-1" type="text" value="rd" size="5" spellcheck="false" data-vector title="first axis">
+          <input id="tripod-label-1" type="text" placeholder="label" size="5" spellcheck="false">
+          <input id="tripod-axis-2" type="text" value="td" size="5" spellcheck="false" data-vector title="second axis">
+          <input id="tripod-label-2" type="text" placeholder="label" size="5" spellcheck="false">
+          <input id="tripod-axis-3" type="text" value="nd" size="5" spellcheck="false" data-vector title="third axis">
+          <input id="tripod-label-3" type="text" placeholder="label" size="5" spellcheck="false">
+        </span>
+      </span>
+      <span class="row wrap">
+        <label class="inline">size <input id="tripod-size" type="range" min="3" max="40" value="11">
+          <span id="tripod-size-value" class="muted">0.11</span></label>
+        <label class="inline">x <input id="tripod-x" type="range" min="0" max="100" value="7">
+          <span id="tripod-x-value" class="muted">0.07</span></label>
+        <label class="inline">y <input id="tripod-y" type="range" min="0" max="100" value="5">
+          <span id="tripod-y-value" class="muted">0.05</span></label>
+      </span>
+    </div>
     <div id="view-box" class="view-box">
       <img id="view" alt="IPF-coloured atoms" draggable="false">
-      <div id="view-placeholder" class="placeholder">Analyse a configuration to see the IPF map.
+      <div id="view-placeholder" class="placeholder">Analyse a configuration to see the 3D IPF map.
         Drag to orbit, scroll to zoom, click an atom for details.</div>
+      <div id="view-busy" class="busy-overlay" hidden><span class="spinner"></span></div>
       <div id="view-error" class="view-error" hidden></div>
       <div id="atom-info" class="atom-info" hidden></div>
     </div>
   </section>
 
   <section class="figures">
-    <div class="card">
+    <div class="card" id="legend-card">
       <div class="card-head"><h2>Colour key</h2>
         <span class="row">
           <select id="legend-structure" title="structure of the colour key"></select>
           <a id="download-legend" class="small button" download>PNG</a>
+          <a id="download-legend-svg" class="small button" download>SVG</a>
         </span>
       </div>
-      <img id="legend" class="figure" alt="IPF colour key">
+      <div class="figure-box"><img id="legend" class="figure" alt="IPF colour key">
+        <div id="legend-busy" class="busy-overlay" hidden><span class="spinner"></span></div></div>
     </div>
-    <div class="card">
+    <div class="card" id="density-card">
       <div class="card-head"><h2>IPF density</h2>
         <span class="row wrap">
           <select id="density-cmap" title="colour scale"></select>
@@ -218,15 +282,22 @@
                    size="3"></label>
           <span class="muted">&deg;</span>
           <a id="download-density" class="small button" download>PNG</a>
+          <a id="download-density-svg" class="small button" download>SVG</a>
         </span>
       </div>
-      <img id="density" class="figure" alt="IPF orientation density">
+      <div class="figure-box"><img id="density" class="figure" alt="IPF orientation density">
+        <div id="density-busy" class="busy-overlay" hidden><span class="spinner"></span></div></div>
     </div>
-    <div class="card wide">
+    <div class="card wide" id="poles-card">
       <div class="card-head"><h2>Pole figures</h2>
         <span class="row wrap">
           <input id="poles" type="text" value="0001,10-10,11-20" size="18" spellcheck="false"
             title="comma-separated pole families, e.g. 0001,10-10">
+          <select id="pole-preset" title="add a common pole family"></select>
+          <label class="inline" title="sample direction drawn at the top of each pole figure">up
+            <input id="pole-up" type="text" value="rd" size="4" spellcheck="false" data-vector></label>
+          <label class="inline" title="sample direction drawn at the right of each pole figure">right
+            <input id="pole-right" type="text" value="td" size="4" spellcheck="false" data-vector></label>
           <label class="inline">c/a <input id="c-over-a" type="number" value="1.633" step="0.001"></label>
           <select id="pole-mode"><option value="density">density</option><option value="scatter">scatter</option></select>
           <select id="pole-structure" title="structure whose orientations are plotted"></select>
@@ -238,15 +309,17 @@ texture; a few degrees brings the intensities onto a comparable scale.">smooth
                    size="3"></label>
           <span class="muted">&deg;</span>
           <a id="download-poles" class="small button" download>PNG</a>
+          <a id="download-poles-svg" class="small button" download>SVG</a>
         </span>
       </div>
-      <img id="polefig" class="figure" alt="pole figures">
+      <div class="figure-box"><img id="polefig" class="figure" alt="pole figures">
+        <div id="polefig-busy" class="busy-overlay" hidden><span class="spinner"></span></div></div>
     </div>
-    <div class="card wide">
-      <div class="card-head"><h2>Flat orientation map</h2>
+    <div class="card wide" id="flatmap-card">
+      <div class="card-head"><h2>IPF map <span class="muted" title="A flat, EBSD-style section">(flat section)</span></h2>
         <span class="row wrap">
           <label class="inline">view
-            <input id="flat-view" type="text" value="z" size="4" spellcheck="false"></label>
+            <input id="flat-view" type="text" value="z" size="4" spellcheck="false" data-vector></label>
           <label class="inline">slab
             <input id="flat-slab" type="number" min="1" step="1" value="10" size="4"></label>
           <span class="muted">&#8491;</span>
@@ -259,11 +332,41 @@ texture; a few degrees brings the intensities onto a comparable scale.">smooth
             <input id="flat-raw" type="checkbox"> raw</label>
           <button id="flat-draw" class="small">draw</button>
           <a id="download-flat" class="small button" download>PNG</a>
+          <a id="download-flat-svg" class="small button" download>SVG</a>
         </span>
       </div>
-      <img id="flatmap" class="figure" alt="flat orientation map">
+      <div class="figure-box"><img id="flatmap" class="figure" alt="IPF map">
+        <div id="flatmap-busy" class="busy-overlay" hidden><span class="spinner"></span></div></div>
       <p id="flat-info" class="muted note"></p>
     </div>
+  </section>
+
+  <section class="card" id="series-card">
+    <div class="card-head"><h2>Render the series</h2>
+      <span id="series-card-info" class="muted"></span>
+    </div>
+    <p class="hint">Every frame of the series is analysed with the settings above (structures,
+    colouring, rotation, slice, boundary filling, camera) and the ticked views are written
+    to a folder under the served root. Movies play at the chosen seconds per frame. A
+    selection is not carried across frames.</p>
+    <div class="row wrap">
+      <label class="inline">from <select id="series-start"></select></label>
+      <label class="inline">to <select id="series-stop"></select></label>
+      <label class="inline">every <input id="series-step" type="number" min="1" step="1" value="1" size="3"> frame(s)</label>
+      <label class="inline">seconds per frame
+        <input id="series-seconds" type="number" min="0.02" step="0.1" value="0.5" size="4"></label>
+      <label class="inline"><input id="series-stamp" type="checkbox" checked> label frames</label>
+    </div>
+    <div id="series-outputs" class="series-outputs"></div>
+    <div class="row wrap">
+      <label class="inline">output folder <input id="series-outdir" type="text" spellcheck="false" placeholder="name_series"></label>
+      <button id="series-run" class="primary small">Render</button>
+      <button id="series-cancel" class="small" disabled>Cancel</button>
+      <a id="series-zip" class="small button" hidden download>Download all (zip)</a>
+    </div>
+    <progress id="series-progress" max="1" value="0" hidden></progress>
+    <div id="series-status" class="muted note"></div>
+    <div id="series-files" class="series-files"></div>
   </section>
 </main>
 </div>

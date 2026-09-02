@@ -146,11 +146,21 @@ def render_ipf(
         pipeline.remove_from_scene()
 
 
-def _tripod_overlay(frame, labels=("rd", "td", "nd"), size: float = 0.11):
+def _tripod_overlay(
+    frame,
+    labels=("rd", "td", "nd"),
+    size: float = 0.11,
+    offset_x: float = 0.07,
+    offset_y: float = 0.05,
+    names=None,
+):
     """A coordinate tripod showing the sample axes, e.g. RD, TD and ND.
 
     Without it a rendered map does not say which way the reference direction
     points, which is the one thing a reader needs to interpret the colours.
+    *labels* are direction specs (named sample axes, cell axes or vectors);
+    *names* optionally replaces the text drawn for each of them.  The offsets
+    are fractions of the image, measured from the lower left corner.
     """
     from ovito.vis import CoordinateTripodOverlay
 
@@ -159,15 +169,21 @@ def _tripod_overlay(frame, labels=("rd", "td", "nd"), size: float = 0.11):
     tripod.size = float(size)
     tripod.line_width = 0.06
     tripod.font_size = 0.42
+    tripod.font_family = "DejaVu Sans"
     # Enough inset that the axis labels are not clipped by the image edge.
-    tripod.offset_x = 0.07
-    tripod.offset_y = 0.05
+    tripod.offset_x = float(offset_x)
+    tripod.offset_y = float(offset_y)
     tripod.axis4_enabled = False
     colors = ((0.85, 0.20, 0.20), (0.20, 0.60, 0.25), (0.20, 0.35, 0.85))
-    for index, (name, color) in enumerate(zip(labels, colors), start=1):
+    labels = [label for label in labels if str(label).strip()][:3]
+    names = list(names or [])
+    for index in range(1, 4):
+        setattr(tripod, f"axis{index}_enabled", False)
+    for index, (spec, color) in enumerate(zip(labels, colors), start=1):
+        text = names[index - 1] if index - 1 < len(names) and names[index - 1] else None
         setattr(tripod, f"axis{index}_enabled", True)
-        setattr(tripod, f"axis{index}_label", frame.label(name))
-        setattr(tripod, f"axis{index}_dir", tuple(float(c) for c in frame.direction(name)))
+        setattr(tripod, f"axis{index}_label", text or frame.label(spec))
+        setattr(tripod, f"axis{index}_dir", tuple(float(c) for c in frame.direction(spec)))
         setattr(tripod, f"axis{index}_color", color)
     return tripod
 
@@ -323,7 +339,10 @@ def render_result(
         if info is not None:
             info["margin"] = float(scene_margin)
         if tripod:
-            viewport.overlays.append(_tripod_overlay(result.frame, tripod_axes))
+            specs, names = tripod_axes, None
+            if len(tripod_axes) == 2 and isinstance(tripod_axes[0], (list, tuple)):
+                specs, names = tripod_axes
+            viewport.overlays.append(_tripod_overlay(result.frame, specs, names=names))
         for name in (["tachyon", "opengl"] if renderer == "auto" else [renderer]):
             try:
                 engine = _make_renderer(name)

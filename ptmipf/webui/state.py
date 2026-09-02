@@ -4,8 +4,13 @@ The expensive step is polyhedral template matching, so the :class:`AppState`
 keeps the most recent :class:`~ptmipf.analysis.IPFResult` in memory and
 distinguishes settings that require a new PTM run (input file, structure set,
 RMSD cutoff, trajectory frame) from settings that only change the colouring
-(projection direction, sample frame, colour-only set).  The latter are applied
-in place by recomputing colours from the cached orientation quaternions.
+(projection direction, sample frame, colour-only set, rigid rotations of the
+system).  The latter are applied by deriving a new result from the cached
+orientation quaternions: rotate, then recolour.
+
+Restricting PTM to a slab is an analysis setting, but a cheap one when the
+full cell has already been matched: the slab is then cut from the cached full
+result instead of being matched again.
 
 All OVITO work is funnelled through a single worker thread: OVITO's scene is
 global and its Qt internals bind to the first thread that runs a pipeline, so
@@ -30,8 +35,19 @@ from ..colorkey import IPFColorKey
 from ..frames import SampleFrame
 from ..structures import DEFAULT_STRUCTURES, get_structure
 from ..symmetry import get_laue_group
+from ..transform import (
+    parse_rotation,
+    rotate_positions,
+    rotate_result,
+    rotation_center,
+    rotation_matrix,
+)
 
-__all__ = ["AppState", "SelectionUnavailableError"]
+__all__ = ["AppState", "SelectionUnavailableError", "derive_result", "rotation_of", "run_ptm"]
+
+#: Atoms beyond the slab that PTM still sees, so that atoms at the slab faces
+#: keep their full neighbour shell; see :func:`ptmipf.analysis.analyse`.
+SLAB_MARGIN = 8.0
 
 
 class SelectionUnavailableError(RuntimeError):
@@ -116,6 +132,168 @@ def _clean_columns(spec) -> dict | None:
     return cleaned
 
 
+def _clean_slab(spec) -> dict | None:
+    """Normalise the slab a PTM run is restricted to.
+
+    The browser sends the slice it is showing: a normal (any direction spec),
+    an absolute distance along it in angstroms and a width; a zero width means
+    everything up to the plane, as in the 3D view.
+    """
+    if not spec:
+        return None
+    axis = str(spec.get("axis") or "").strip()
+    if not axis:
+        return None
+    return {
+        "axis": axis,
+        "distance": round(float(spec.get("distance") or 0.0), 4),
+        "width": round(max(0.0, float(spec.get("width") or 0.0)), 4),
+    }
+
+
+def _clean_rotations(spec) -> tuple:
+    """Normalise the list of rigid rotations, as ``(axis, degrees)`` pairs.
+
+    Accepts the dialog's ``{"axis": .., "angle": ..}`` objects, ``[axis, angle]``
+    pairs and the CLI's ``AXIS:DEGREES`` strings.  Zero-angle entries are
+    dropped, so that they do not force a needless recolouring.
+    """
+    rotations = []
+    for item in spec or []:
+        if isinstance(item, str):
+            axis, angle = parse_rotation(item)
+        elif isinstance(item, dict):
+            axis, angle = str(item.get("axis") or ""), float(item.get("angle") or 0.0)
+        else:
+            axis, angle = str(item[0]), float(item[1])
+        axis = axis.strip()
+        if axis and angle:
+            rotations.append((axis, round(angle, 6)))
+    return tuple(rotations)
+
+
+def rotation_of(colour: dict, frame: SampleFrame | None = None) -> np.ndarray | None:
+    """The composed rotation matrix of the colour settings, or None without one.
+
+    Each rotation turns the system about an axis fixed in the sample frame,
+    in the order given, which is what the CLI's repeated ``--rotate`` does.
+    """
+    rotations = colour.get("rotations") or ()
+    if not rotations:
+        return None
+    frame = frame or SampleFrame(colour.get("axes") or {})
+    matrix = np.eye(3)
+    for axis, angle in rotations:
+        matrix = rotation_matrix(frame.direction(axis), angle) @ matrix
+    return matrix
+
+
+def derive_result(base: IPFResult, colour: dict) -> IPFResult:
+    """The result the interface shows: *base* rotated, then recoloured.
+
+    This mirrors the colouring block of :func:`ptmipf.analysis.analyse` and
+    is what makes changing the projection direction, or turning the whole
+    system, instant.  *base* is never modified.
+    """
+    frame = SampleFrame(colour["axes"])
+    matrix = rotation_of(colour, frame)
+    result = base if matrix is None else rotate_result(base, matrix)
+    d = frame.direction(colour["direction"])
+    colour_these = {
+        get_structure(s).name
+        for s in (colour["color_only"] or [s.name for s in result.structures])
+    }
+    colors = np.tile(np.asarray(colour["other_color"], dtype=float), (result.n_atoms, 1))
+    for s in result.structures:
+        selection = result.structure_types == result.type_codes[s.name]
+        if not s.colorable or s.name not in colour_these or not selection.any():
+            continue
+        key = IPFColorKey(get_laue_group(s.laue))
+        rotations = quaternions_to_matrices(result.orientations[selection])
+        colors[selection] = key.orientation2color(rotations, d)
+    return dataclasses.replace(
+        result,
+        colors=colors,
+        direction=d,
+        direction_label=frame.label(colour["direction"]),
+        frame=frame,
+    )
+
+
+def _slab_mask_of(result: IPFResult, slab: dict, colour: dict) -> np.ndarray:
+    """Which atoms of the unrotated *result* lie in *slab*.
+
+    The slab is what the 3D view shows, so it is defined on the rotated
+    positions with the same rule as :func:`ptmipf.webui.rendering.visible_mask`.
+    """
+    frame = SampleFrame(colour["axes"])
+    matrix = rotation_of(colour, frame)
+    positions = result.positions
+    if matrix is not None:
+        center = rotation_center(result.cell, positions)
+        positions = rotate_positions(positions, matrix, center)
+    projected = positions @ frame.direction(slab["axis"])
+    if slab["width"] > 0:
+        return np.abs(projected - slab["distance"]) <= slab["width"] / 2.0
+    return projected <= slab["distance"]
+
+
+def _slab_for_analysis(slab: dict, colour: dict) -> dict:
+    """The ``slab=`` argument of :func:`ptmipf.analysis.analyse` for *slab*."""
+    frame = SampleFrame(colour["axes"])
+    distance, width = slab["distance"], slab["width"]
+    low, high = (None, distance) if width <= 0 else (distance - width / 2, distance + width / 2)
+    spec = {"normal": frame.direction(slab["axis"]), "low": low, "high": high,
+            "margin": SLAB_MARGIN}
+    matrix = rotation_of(colour, frame)
+    if matrix is not None:
+        spec["rotation"] = (matrix, None)
+    return spec
+
+
+def run_ptm(analysis: dict, colour: dict, progress=None, path=None, frame_index=None):
+    """Match and colour one configuration with the interface's settings.
+
+    Must run on the OVITO worker thread.  *path* and *frame_index* override
+    the ones in *analysis*, which is how a trajectory series is stepped
+    through with the settings of the current analysis.  The result is what
+    :func:`ptmipf.analysis.analyse` returns: unrotated, coloured along the
+    requested direction; :func:`derive_result` applies any rotation.
+    """
+    from ..analysis import analyse, analyse_orientations
+
+    frame = SampleFrame(colour["axes"])
+    common = {
+        "direction": colour["direction"],
+        "structures": analysis["structures"],
+        "frame": frame,
+        "frame_index": analysis["frame_index"] if frame_index is None else int(frame_index),
+        "other_color": colour["other_color"],
+        "only": colour["color_only"],
+    }
+    path = str(path or analysis["path"])
+    slab = _slab_for_analysis(analysis["slab"], colour) if analysis.get("slab") else None
+    if analysis.get("columns"):
+        if progress:
+            progress(STAGES[0][0])
+        result = analyse_orientations(path, analysis["columns"], slab=slab, **common)
+        if progress:
+            progress(STAGES[2][0])
+    else:
+        result = analyse(
+            path, rmsd_cutoff=analysis["rmsd_cutoff"], progress=progress, slab=slab, **common
+        )
+    if result.n_atoms == 0:
+        raise ValueError("the slice contains no atoms; move it first")
+    return result
+
+
+def _without_slab(analysis: dict | None) -> dict | None:
+    if analysis is None:
+        return None
+    return {k: v for k, v in analysis.items() if k != "slab"}
+
+
 #: What each stage of an analysis covers on the progress bar, in order, with
 #: the quantity its duration scales with.  OVITO reports nothing while it is
 #: working, so the bar is interpolated inside a stage from elapsed time against
@@ -142,9 +320,14 @@ class AppState:
         # A single thread for everything that touches OVITO (see module docstring).
         self.ovito = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ovito")
 
-        self.result: IPFResult | None = None
+        self.result: IPFResult | None = None  # what the interface shows: derived
+        self.base_result: IPFResult | None = None  # the PTM output it derives from
         self.analysis_params: dict | None = None  # settings that forced the last PTM run
         self.colour_params: dict = {}
+        # The last whole-cell PTM result and its settings, kept so that a slab
+        # can be cut from it, and the whole cell restored, without matching again.
+        self.full_result: IPFResult | None = None
+        self.full_params: dict | None = None
         self.job = {"state": "idle", "stage": "", "error": "", "started": 0.0}
         self.selection_mask: np.ndarray | None = None
         self.selection_criteria: list = []
@@ -155,6 +338,8 @@ class AppState:
         # A colour map uploaded this session, as an (n, 3) array.  Kept in
         # memory rather than written anywhere, and gone when the server stops.
         self.custom_colormap = None
+        # The batch render of a trajectory series, if one has been started.
+        self.series_job = None
         # Throughput used to turn stage boundaries into a percentage, refined
         # from every run this process completes; see _stage_progress.
         self._rates = dict(_SEED_RATES)
@@ -185,12 +370,17 @@ class AppState:
             # and PTM is skipped; it belongs with the settings that force a
             # re-read, because changing the mapping changes every orientation.
             "columns": _clean_columns(params.get("columns")),
+            # Restricting PTM to a slab changes which atoms exist in the result.
+            "slab": _clean_slab(params.get("slab")),
         }
         colour = {
             "direction": params.get("direction", "z"),
             "axes": {k: v for k, v in (params.get("axes") or {}).items() if v},
             "color_only": tuple(params["color_only"]) if params.get("color_only") else None,
             "other_color": tuple(params.get("other_color") or DEFAULT_OTHER_COLOR),
+            # Rigid rotations of the whole system only move orientations
+            # relative to the sample frame, so they are a colouring setting.
+            "rotations": _clean_rotations(params.get("rotations")),
         }
         return analysis, colour
 
@@ -209,9 +399,23 @@ class AppState:
         with self.lock:
             if self.job["state"] == "running":
                 return {"accepted": False, "reason": "an analysis is already running"}
-            if self.result is not None and analysis == self.analysis_params:
-                self._recolour(colour)
+            if self.base_result is not None and analysis == self.analysis_params:
+                self._derive(colour)
                 return {"accepted": True, "recoloured": True}
+            # A slab of a cell that has already been matched, or the whole
+            # cell again after a slab, comes straight from the cached result.
+            if (
+                self.full_result is not None
+                and _without_slab(analysis) == _without_slab(self.full_params)
+            ):
+                base = self.full_result
+                if analysis["slab"]:
+                    keep = _slab_mask_of(base, analysis["slab"], colour)
+                    if not keep.any():
+                        raise ValueError("the slice contains no atoms; move it first")
+                    base = base.subset(keep)
+                self._install(base, analysis, colour)
+                return {"accepted": True, "recoloured": True, "subset": True}
             now = time.time()
             self.job = {
                 "state": "running",
@@ -229,31 +433,8 @@ class AppState:
             return {"accepted": True, "recoloured": False}
 
     def _run_analysis(self, analysis: dict, colour: dict) -> None:
-        from ..analysis import analyse, analyse_orientations
-
         try:
-            frame = SampleFrame(colour["axes"])
-            common = {
-                "direction": colour["direction"],
-                "structures": analysis["structures"],
-                "frame": frame,
-                "frame_index": analysis["frame_index"],
-                "other_color": colour["other_color"],
-                "only": colour["color_only"],
-            }
-            if analysis["columns"]:
-                self._stage_started(STAGES[0][0])
-                result = analyse_orientations(
-                    analysis["path"], analysis["columns"], **common
-                )
-                self._stage_started(STAGES[2][0])
-            else:
-                result = analyse(
-                    analysis["path"],
-                    rmsd_cutoff=analysis["rmsd_cutoff"],
-                    progress=self._stage_started,
-                    **common,
-                )
+            result = run_ptm(analysis, colour, progress=self._stage_started)
         except Exception as exc:  # surfaced through /api/status, not a traceback
             with self.lock:
                 self.job = {
@@ -262,14 +443,25 @@ class AppState:
                 }
             return
         with self.lock:
-            self.result = result
-            self.analysis_params = analysis
-            self.colour_params = colour
-            self.selection_mask = None
-            self.selection_criteria = []
+            # analyse() has already coloured along the requested direction; a
+            # rotation is the one colour setting it knows nothing about.
+            self._install(result, analysis, colour, derive=bool(colour["rotations"]))
             self.job = {
                 "state": "done", "stage": "", "error": "", "started": 0.0, "progress": 1.0
             }
+
+    def _install(self, base: IPFResult, analysis: dict, colour: dict, derive=True) -> None:
+        """Make *base* the current PTM result and derive the shown one from it."""
+        with self.lock:
+            self.base_result = base
+            self.analysis_params = analysis
+            self.colour_params = colour
+            if analysis["slab"] is None:
+                self.full_result, self.full_params = base, analysis
+            self.result = derive_result(base, colour) if derive else base
+            self.selection_mask = None
+            self.selection_criteria = []
+            self._fill_cache = None
             self.generation += 1
 
     def _stage_started(self, stage: str, n_atoms: int | None = None) -> None:
@@ -322,33 +514,12 @@ class AppState:
         fraction = min((now - job.get("stage_started", now)) / expected, 0.97)
         return round(min(1.0, base + (top - base) * max(fraction, 0.0)), 3)
 
-    def _recolour(self, colour: dict) -> None:
-        """Recompute colours in place from the cached orientations.
-
-        This mirrors the colouring block of :func:`ptmipf.analysis.analyse`
-        and is what makes changing the projection direction instant.
-        """
-        result = self.result
-        frame = SampleFrame(colour["axes"])
-        d = frame.direction(colour["direction"])
-        colour_these = {
-            get_structure(s).name
-            for s in (colour["color_only"] or [s.name for s in result.structures])
-        }
-        colors = np.tile(np.asarray(colour["other_color"], dtype=float), (result.n_atoms, 1))
-        for s in result.structures:
-            selection = result.structure_types == result.type_codes[s.name]
-            if not s.colorable or s.name not in colour_these or not selection.any():
-                continue
-            key = IPFColorKey(get_laue_group(s.laue))
-            rotations = quaternions_to_matrices(result.orientations[selection])
-            colors[selection] = key.orientation2color(rotations, d)
-        result.colors = colors
-        result.direction = d
-        result.direction_label = frame.label(colour["direction"])
-        result.frame = frame
-        self.colour_params = colour
-        self.generation += 1
+    def _derive(self, colour: dict) -> None:
+        """Re-derive the shown result for new colour settings; PTM is untouched."""
+        with self.lock:
+            self.result = derive_result(self.base_result, colour)
+            self.colour_params = colour
+            self.generation += 1
 
     def view_result(self, fill_radius=None, fill_min_neighbours: int = 3) -> IPFResult | None:
         """The cached result, with the boundary atoms filled in if asked.
@@ -405,6 +576,14 @@ class AppState:
                         k: np.round(v, 6).tolist() for k, v in result.frame.axes.items()
                     },
                     "summary": result.summary(),
+                    "slab": self.analysis_params.get("slab"),
+                    "rotations": [list(r) for r in self.colour_params.get("rotations", ())],
+                    "full_n_atoms": (
+                        self.full_result.n_atoms
+                        if self.full_result is not None
+                        and _without_slab(self.full_params) == _without_slab(self.analysis_params)
+                        else None
+                    ),
                 }
                 if self.selection_mask is not None:
                     payload["selection"] = {
@@ -513,6 +692,35 @@ class AppState:
     # ------------------------------------------------------------------
     # first-run diagnostics
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # trajectory series
+    # ------------------------------------------------------------------
+    def series_status(self) -> dict:
+        with self.lock:
+            job = self.series_job
+        if job is None:
+            return {"state": "idle", "files": [], "item": 0, "n_items": 0, "progress": 0.0}
+        return job.status()
+
+    def series_output(self, name: str) -> Path:
+        """One file the series job wrote; nothing outside its folder is served."""
+        with self.lock:
+            job = self.series_job
+        if job is None:
+            raise FileNotFoundError("no series has been rendered")
+        target = (job.out_dir / name).resolve()
+        if job.out_dir.resolve() not in target.parents or not target.is_file():
+            raise FileNotFoundError(f"no such series output: {name}")
+        return target
+
+    def cancel_series(self) -> dict:
+        with self.lock:
+            job = self.series_job
+        if job is None or job.state_name != "running":
+            return {"cancelled": False}
+        job.cancel.set()
+        return {"cancelled": True}
+
     def diagnostics(self) -> dict:
         """Probe everything the interface needs, and say what is missing.
 

@@ -109,6 +109,12 @@ def render_scene(
     transparent: bool = False,
     radius: float | None = None,
     tripod: bool = False,
+    tripod_axes=None,
+    tripod_labels=None,
+    tripod_size: float = 0.11,
+    tripod_x: float = 0.07,
+    tripod_y: float = 0.05,
+    label: str | None = None,
     engine: str = "auto",
 ) -> str:
     """Render *result* to a PNG file and return the filename.
@@ -117,6 +123,12 @@ def render_scene(
     *engine* is ``opengl``, ``tachyon`` or ``auto``, which tries OpenGL first
     and falls back; the diagnostics probe names one so it can report which
     renderer actually works here.
+
+    The triad shows the sample axes RD, TD and ND unless *tripod_axes* names
+    other directions (any spec the frame resolves), optionally captioned by
+    *tripod_labels*; *tripod_size* and the offsets are fractions of the
+    viewport.  *label* is stamped in the top left corner, which is how a frame
+    of a trajectory series says which frame it is.
     """
     from ovito.data import DataCollection, Particles, SimulationCell
     from ovito.pipeline import Pipeline, StaticSource
@@ -163,11 +175,39 @@ def render_scene(
         if tripod:
             from ..render import _tripod_overlay
 
-            viewport.overlays.append(_tripod_overlay(result.frame))
+            viewport.overlays.append(
+                _tripod_overlay(
+                    result.frame,
+                    tuple(tripod_axes) if tripod_axes else ("rd", "td", "nd"),
+                    size=float(tripod_size),
+                    offset_x=float(tripod_x),
+                    offset_y=float(tripod_y),
+                    names=tuple(tripod_labels) if tripod_labels else None,
+                )
+            )
+        if label:
+            viewport.overlays.append(_text_overlay(str(label)))
         _render_with(viewport, filename, size, transparent, engine)
     finally:
         pipeline.remove_from_scene()
     return str(filename)
+
+
+def _text_overlay(text: str):
+    """A caption in the top left corner of the viewport."""
+    from ovito.qt_compat import QtCore
+    from ovito.vis import TextLabelOverlay
+
+    overlay = TextLabelOverlay(text=text)
+    # Qt's default family on a bare box measures with one font and draws
+    # with another, which clips the end of the text; naming one avoids that.
+    overlay.font_family = "DejaVu Sans"
+    overlay.alignment = QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft
+    overlay.font_size = 0.05
+    overlay.offset_x = 0.02
+    overlay.offset_y = -0.02
+    overlay.text_color = (0.1, 0.1, 0.1)
+    return overlay
 
 
 def _fov(scene_radius: float, zoom: float) -> float:

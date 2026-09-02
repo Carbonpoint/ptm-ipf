@@ -203,3 +203,59 @@ def test_an_unknown_colour_map_stops_the_run(crystal, tmp_path):
             "--pole-figure-file", str(tmp_path / "pf.png"),
             "--pole-figure-cmap", "not-a-colour-map",
         ])
+
+
+def _atoms_written(path):
+    ase_io = pytest.importorskip("ase.io")
+    return ase_io.read(str(path), format="extxyz")
+
+
+def test_rotate_turns_the_written_system_and_its_colours(crystal, tmp_path, capsys):
+    """A crystal seen along z, turned 90 degrees about x, is seen along -y."""
+    plain = tmp_path / "plain.xyz"
+    turned = tmp_path / "turned.xyz"
+    assert main([crystal, "--structures", "hcp", "-q", "--no-export-directions",
+                 "-o", str(plain)]) == 0
+    assert main([crystal, "--structures", "hcp", "-q", "--no-export-directions",
+                 "--rotate", "x:90", "-o", str(turned)]) == 0
+    before, after = _atoms_written(plain), _atoms_written(turned)
+    assert len(before) == len(after)
+    # The cell has turned with the atoms: its old y edge now runs along z.
+    assert before.cell[1][1] > 1 and abs(after.cell[1][2] - before.cell[1][1]) < 1e-6
+    # And the colours are of a different direction through the crystal.
+    assert not (before.arrays["color"] == after.arrays["color"]).all()
+
+
+def test_rotate_rejects_a_malformed_spec(crystal, tmp_path):
+    with pytest.raises(ValueError):
+        main([crystal, "--structures", "hcp", "-q", "--rotate", "z"])
+
+
+def test_ptm_slice_writes_only_the_slab(crystal, tmp_path):
+    whole = tmp_path / "whole.xyz"
+    slab = tmp_path / "slab.xyz"
+    assert main([crystal, "--structures", "hcp", "-q", "--no-export-directions",
+                 "-o", str(whole)]) == 0
+    assert main([crystal, "--structures", "hcp", "-q", "--no-export-directions",
+                 "--ptm-slice", "--slice", "z", "--slice-distance", "6",
+                 "--slice-width", "4", "-o", str(slab)]) == 0
+    before, after = _atoms_written(whole), _atoms_written(slab)
+    assert 0 < len(after) < len(before)
+    assert (abs(after.positions[:, 2] - 6.0) <= 2.0 + 1e-6).all()
+    # The slab is matched properly: its atoms are hcp, not "other" at the faces.
+    assert (after.arrays["structure_type"] > 0).all()
+
+
+def test_ptm_slice_needs_a_slice_and_a_distance(crystal):
+    with pytest.raises(SystemExit, match="--ptm-slice needs --slice"):
+        main([crystal, "--structures", "hcp", "-q", "--ptm-slice"])
+    with pytest.raises(SystemExit, match="--slice-distance"):
+        main([crystal, "--structures", "hcp", "-q", "--ptm-slice", "--slice", "z"])
+
+
+def test_tripod_axes_are_split_into_directions_and_labels():
+    from ptmipf.cli import _tripod_axes
+
+    assert _tripod_axes("rd;td;nd") == (["rd", "td", "nd"], ["", "", ""])
+    assert _tripod_axes("1,1,0=loading; nd ;td=T") == (["1,1,0", "nd", "td"], ["loading", "", "T"])
+    assert _tripod_axes("") == (["rd", "td", "nd"], ["", "", ""])

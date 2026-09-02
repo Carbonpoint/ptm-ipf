@@ -237,9 +237,19 @@ instead), `--slice-distance` moves the plane along its normal, and `--view` puts
 on an axis looking down it, orthographically, so grains appear as flat coloured regions
 with the grain boundaries between them. `--view` accepts an axis, a named sample axis or a
 vector, `--perspective` restores the perspective camera, and `--tripod` draws a coordinate
-triad labelled with the sample axes. The web interface has the same
-controls: a thickness box beside the slice slider, X/Y/Z buttons for the axial views, a
-triad toggle, boundary filling, and a flat orientation map panel.
+triad labelled with the sample axes (`--tripod-axes 'x;y;1,1,0=loading'` shows other
+directions, each with an optional label). The web interface has the same controls: a
+thickness box and a number box beside the slice slider, X/Y/Z buttons for the axial views,
+a triad toggle with size and position sliders, boundary filling, and an IPF map panel.
+
+Two more options change what is analysed rather than what is drawn. `--rotate AXIS:DEGREES`
+turns the whole system (atoms, orientations and cell) about the cell centre before
+colouring, with the sample frame staying put; it is repeatable and applied in order, so
+`--rotate z:45 --rotate 1,1,0:90` is a rotation about z followed by one about [110].
+`--ptm-slice` runs PTM only on the `--slice` slab (`--slice-distance` places it,
+`--slice-width` gives it a thickness) plus a margin so the faces are matched correctly, and
+keeps only the slab: everything written afterwards is of that slab, and a large cell is
+analysed in a fraction of the time.
 
 ### Flat orientation maps
 
@@ -584,12 +594,16 @@ python -m ptmipf.webui --root ~/simulations
 [![The web interface](docs/webui_light.png)](docs/webui.md)
 
 Load a configuration, set the structures, sample frame and projection direction, orbit and
-slice the 3D view, build a selection from several criteria (including "the basal-oriented
-grains" and "the grain containing this atom I clicked"), restrict the pole figures and IPF
-density to it, and export everything. Changing only the projection direction re-uses the
-cached PTM result, so recolouring is immediate. The *CLI command* button prints the
-`ptmipf` command line that reproduces the session, so exploration turns straight into a
-scriptable analysis. See [docs/webui.md](docs/webui.md) for the full tour.
+slice the 3D view (the slice applies to the pole figures, IPF density and IPF map too, and
+*Analyse slice* runs PTM on just that slab), rotate the whole system about any axis, build
+a selection from several criteria (including "the basal-oriented grains" and "the grain
+containing this atom I clicked"), restrict the pole figures and IPF density to it, and
+export everything as PNG or SVG. Changing only the projection direction or a rotation
+re-uses the cached PTM result, so recolouring is immediate. A numbered file series is
+stepped through with arrows, and the *Render series* card writes stills or a GIF/MP4 of
+any of the views for a range of frames. The *CLI command* button prints the `ptmipf`
+command line that reproduces the session, so exploration turns straight into a scriptable
+analysis. See [docs/webui.md](docs/webui.md) for the full tour.
 
 ## Showcase
 

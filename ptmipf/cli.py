@@ -112,6 +112,15 @@ def build_parser() -> argparse.ArgumentParser:
             help=f"define the {axis.upper()} sample axis in cell coordinates, "
             f"e.g. --{axis} 1,1,0",
         )
+    group.add_argument(
+        "--rotate",
+        metavar="AXIS:DEGREES",
+        action="append",
+        default=[],
+        help="turn the whole system (atoms, orientations and cell) about the cell "
+        "centre before colouring, e.g. --rotate z:45 or --rotate 1,1,0:90; the "
+        "sample axes stay put.  Repeatable, applied in order",
+    )
 
     group = parser.add_argument_group("structure identification")
     group.add_argument(
@@ -450,6 +459,13 @@ def build_parser() -> argparse.ArgumentParser:
         "cutting the cell in half; 0 cuts in half (default: %(default)s)",
     )
     group.add_argument(
+        "--ptm-slice",
+        action="store_true",
+        help="run polyhedral template matching only on the --slice slab (plus a margin "
+        "so its faces are matched correctly) instead of the whole cell, and keep "
+        "only the slab; everything written afterwards is of the slab",
+    )
+    group.add_argument(
         "--view",
         metavar="AXIS",
         help="view along this direction (axis, named sample axis or vector), "
@@ -468,6 +484,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--tripod",
         action="store_true",
         help="draw a coordinate tripod labelled with the sample axes (RD, TD, ND)",
+    )
+    group.add_argument(
+        "--tripod-axes",
+        metavar="A;B;C",
+        default="rd;td;nd",
+        help="the three directions the tripod shows, separated by semicolons: named "
+        "sample axes, cell axes or vectors, each optionally followed by =LABEL, "
+        "e.g. 'x;y;z' or '1,1,0=loading;nd;td' (default: %(default)s)",
     )
     parser.add_argument("-q", "--quiet", action="store_true", help="suppress the summary")
     return parser
@@ -644,6 +668,50 @@ def _animate(args) -> int:
     return 0
 
 
+def _rotation_of(args, frame):
+    """The combined rotation matrix of every --rotate, or None."""
+    if not args.rotate:
+        return None
+    import numpy as np
+
+    from .transform import parse_rotation, rotation_matrix
+
+    matrix = np.eye(3)
+    for spec in args.rotate:
+        axis, angle = parse_rotation(spec)
+        matrix = rotation_matrix(frame.direction(axis), angle) @ matrix
+    return matrix
+
+
+def _slab_of(args, frame, rotation):
+    """The --slice slab as :func:`ptmipf.analysis.analyse` wants it."""
+    import numpy as np
+
+    normal = frame.direction(args.slice_normal)
+    if args.slice_distance is None:
+        raise SystemExit("--ptm-slice needs --slice-distance to place the slab")
+    distance = float(args.slice_distance)
+    width = float(args.slice_width or 0.0)
+    low, high = (None, distance) if width <= 0 else (distance - width / 2, distance + width / 2)
+    slab = {"normal": normal, "low": low, "high": high}
+    if rotation is not None:
+        # The slab is placed on the rotated system, so the file is cut with
+        # the plane turned back; the centre is fixed once the cell is read.
+        slab["rotation"] = (np.asarray(rotation), None)
+    return slab
+
+
+def _tripod_axes(text: str):
+    """Split ``--tripod-axes`` into direction specs and optional labels."""
+    specs, names = [], []
+    for item in str(text or "rd;td;nd").split(";"):
+        spec, _, name = item.partition("=")
+        if spec.strip():
+            specs.append(spec.strip())
+            names.append(name.strip())
+    return specs, names
+
+
 def _color(text: str):
     parts = [float(t) for t in text.replace(",", " ").split()]
     if len(parts) != 3:
@@ -678,6 +746,13 @@ def main(argv=None) -> int:
     structures = _parse_structure_list(args.structures)
     only = _parse_structure_list(args.color_only) if args.color_only else None
 
+    rotation = _rotation_of(args, frame)
+    slab = None
+    if args.ptm_slice:
+        if not args.slice_normal:
+            raise SystemExit("--ptm-slice needs --slice to say where the slab is")
+        slab = _slab_of(args, frame, rotation)
+
     result = analyse(
         args.input,
         direction=args.direction,
@@ -687,7 +762,17 @@ def main(argv=None) -> int:
         rmsd_cutoff=args.rmsd_cutoff,
         other_color=_color(args.other_color),
         only=only,
+        slab=slab,
     )
+    if rotation is not None:
+        from .transform import rotate_result
+
+        result = rotate_result(result, rotation).recolor(
+            args.direction, frame=frame, only=only
+        )
+    if slab is not None:
+        # The slab is the whole result now; cutting it again would empty it.
+        args.slice_normal = None
 
     if args.fill_boundaries is not None:
         from .fill import fill_boundary_orientations
@@ -919,6 +1004,7 @@ def main(argv=None) -> int:
             perspective=perspective,
             transparent=args.transparent,
             tripod=args.tripod,
+            tripod_axes=_tripod_axes(args.tripod_axes),
         )
         if not args.quiet:
             print(f"wrote {args.render}")

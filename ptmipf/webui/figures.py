@@ -1,4 +1,4 @@
-"""Matplotlib figures for the web UI, returned as in-memory PNG bytes.
+"""Matplotlib figures for the web UI, returned as in-memory PNG or SVG bytes.
 
 These are thin wrappers around :mod:`ptmipf.legend` and
 :mod:`ptmipf.polefigure`; the web UI adds nothing of its own to the plots, so
@@ -15,18 +15,45 @@ from ..polefigure import IDEAL_C_OVER_A
 from ..structures import get_structure
 from ..symmetry import get_laue_group
 
-__all__ = ["figure_png", "ipf_density_png", "legend_png", "pole_figure_png"]
+__all__ = [
+    "content_type",
+    "figure_bytes",
+    "figure_png",
+    "flat_map_png",
+    "ipf_density_png",
+    "legend_png",
+    "pole_figure_png",
+]
+
+_CONTENT_TYPES = {"png": "image/png", "svg": "image/svg+xml"}
 
 
-def figure_png(fig, dpi: int = 130, transparent: bool = False) -> bytes:
+def content_type(fmt: str) -> str:
+    return _CONTENT_TYPES[normalise_format(fmt)]
+
+
+def normalise_format(fmt) -> str:
+    fmt = str(fmt or "png").lower().lstrip(".")
+    if fmt not in _CONTENT_TYPES:
+        raise ValueError(f"figures come as png or svg, not {fmt!r}")
+    return fmt
+
+
+def figure_bytes(fig, fmt: str = "png", dpi: int = 130, transparent: bool = False) -> bytes:
+    """Serialise and close *fig*; SVG keeps the plot editable in Inkscape."""
     import matplotlib.pyplot as plt
 
+    fmt = normalise_format(fmt)
     buffer = io.BytesIO()
     try:
-        fig.savefig(buffer, format="png", dpi=dpi, transparent=transparent)
+        fig.savefig(buffer, format=fmt, dpi=dpi, transparent=transparent)
     finally:
         plt.close(fig)
     return buffer.getvalue()
+
+
+def figure_png(fig, dpi: int = 130, transparent: bool = False) -> bytes:
+    return figure_bytes(fig, "png", dpi=dpi, transparent=transparent)
 
 
 def default_plot_structure(result, requested: str | None = None) -> str:
@@ -50,7 +77,9 @@ def _rotations(result, structure: str) -> np.ndarray:
     return rotations
 
 
-def legend_png(result, structure: str | None = None, dpi: int = 130) -> bytes:
+def legend_png(
+    result, structure: str | None = None, dpi: int = 130, fmt: str = "png"
+) -> bytes:
     from ..legend import ipf_legend
 
     name = default_plot_structure(result, structure)
@@ -58,7 +87,7 @@ def legend_png(result, structure: str | None = None, dpi: int = 130) -> bytes:
     fig = ipf_legend(
         laue, direction_label=result.direction_label, structure_label=name
     )
-    return figure_png(fig, dpi=dpi, transparent=True)
+    return figure_bytes(fig, fmt, dpi=dpi, transparent=True)
 
 
 def pole_figure_png(
@@ -71,11 +100,34 @@ def pole_figure_png(
     cmap="viridis",
     max_orientations: int = 200_000,
     dpi: int = 130,
+    fmt: str = "png",
+    up=None,
+    right=None,
 ) -> bytes:
+    """Pole figures, by default with RD up and TD right.
+
+    *up* and *right* take any direction spec; the projection looks down their
+    cross product, so choosing them chooses the whole view.
+    """
     from ..polefigure import pole_figure
 
     name = default_plot_structure(result, structure)
     laue = get_laue_group(get_structure(name).laue)
+    axes = {}
+    if up or right:
+        frame = result.frame
+        up_v = frame.direction(up or "rd")
+        right_v = frame.direction(right or "td")
+        center = np.cross(right_v, up_v)
+        if np.linalg.norm(center) < 1e-6:
+            raise ValueError("the up and right directions of a pole figure must differ")
+        # The specs, not the vectors, go through for the two labelled axes so
+        # that "x" is labelled X rather than [1 0 0].
+        axes = {
+            "up": up or "rd",
+            "right": right or "td",
+            "center": center / np.linalg.norm(center),
+        }
     fig = pole_figure(
         _rotations(result, name),
         list(poles),
@@ -86,8 +138,9 @@ def pole_figure_png(
         smoothing=smoothing,
         cmap=cmap,
         max_orientations=max_orientations,
+        **axes,
     )
-    return figure_png(fig, dpi=dpi)
+    return figure_bytes(fig, fmt, dpi=dpi)
 
 
 def ipf_density_png(
@@ -98,6 +151,7 @@ def ipf_density_png(
     cmap="magma",
     max_orientations: int = 200_000,
     dpi: int = 130,
+    fmt: str = "png",
 ) -> bytes:
     from ..polefigure import ipf_density
 
@@ -112,7 +166,7 @@ def ipf_density_png(
         cmap=cmap,
         max_orientations=max_orientations,
     )
-    return figure_png(fig, dpi=dpi)
+    return figure_bytes(fig, fmt, dpi=dpi)
 
 
 def flat_map_png(
@@ -124,11 +178,16 @@ def flat_map_png(
     fill_unindexed: bool = True,
     structure: str | None = None,
     dpi: int = 130,
+    slab_center: float | None = None,
+    title: str | None = None,
+    fmt: str = "png",
 ) -> tuple[bytes, dict]:
     """A flat orientation map of a section, plus what it found.
 
-    Returns the PNG and a summary, so the page can report the grain count and
-    the size of the map without decoding the image.
+    Returns the image and a summary, so the page can report the grain count
+    and the size of the map without decoding the image.  *slab_center* is the
+    position of the section along the view direction; without it the section
+    is taken through the middle of the cell.
     """
     from ..flatmap import flat_ipf_map, save_flat_map
 
@@ -136,15 +195,17 @@ def flat_map_png(
         result,
         view=view,
         slab_width=slab_width,
+        slab_center=slab_center,
         pixel_size=pixel_size,
         boundary_angle=boundary_angle,
         structure=structure or default_plot_structure(result, structure),
         fill_unindexed=fill_unindexed,
     )
-    fig = save_flat_map(flat, None, title=f"IPF {result.direction_label}")
+    fig = save_flat_map(flat, None, title=title or f"IPF {result.direction_label}")
     info = {
         "n_grains": flat.n_grains,
         "rows": flat.shape[0],
         "columns": flat.shape[1],
+        "slab_center": round(float(flat.slab_center), 4),
     }
-    return figure_png(fig, dpi=dpi), info
+    return figure_bytes(fig, fmt, dpi=dpi), info

@@ -25,6 +25,7 @@ __all__ = [
     "list_columns",
     "ipf_color_modifier",
     "quaternions_to_matrices",
+    "slab_mask",
 ]
 
 #: Colour given to atoms without a recognised lattice orientation.
@@ -199,6 +200,73 @@ def _ptm_modifier(structures, rmsd_cutoff: float):
     return modifier, type_codes
 
 
+def slab_mask(
+    positions,
+    normal,
+    low: float | None,
+    high: float | None,
+    margin: float = 0.0,
+    cell=None,
+    pbc=(True, True, True),
+    rotation=None,
+) -> np.ndarray:
+    """Atoms whose projection on *normal* lies in ``[low, high]``, widened by *margin*.
+
+    With a margin, atoms just outside the slab are kept as well, and so are
+    their periodic images: an atom on the face of the slab needs its
+    neighbours to be matched, and near a cell boundary those neighbours sit
+    across it.  Without the images, PTM would leave every atom near a periodic
+    face unindexed.  *rotation* is an optional ``(matrix, center)`` pair
+    applied to the positions first, so a slab defined on a rotated view can be
+    cut from the unrotated file.
+    """
+    positions = np.asarray(positions, dtype=float)
+    normal = np.asarray(normal, dtype=float)
+    normal = normal / np.linalg.norm(normal)
+    if rotation is not None:
+        from .transform import rotate_positions
+
+        matrix, center = rotation
+        positions = rotate_positions(positions, matrix, center)
+    projected = positions @ normal
+    lo = -np.inf if low is None else float(low) - margin
+    hi = np.inf if high is None else float(high) + margin
+    keep = (projected >= lo) & (projected <= hi)
+    if margin <= 0 or cell is None:
+        return keep
+    cell = np.asarray(cell, dtype=float)[:, :3]
+    if rotation is not None:
+        cell = rotation[0] @ cell
+    # Shifts by the periodic cell vectors, projected on the normal; only the
+    # ones that move an atom along the normal matter.
+    shifts = []
+    for axis in range(3):
+        step = float(cell[:, axis] @ normal)
+        if pbc[axis] and abs(step) > 1e-9:
+            shifts.append(step)
+    offsets = {0.0}
+    for step in shifts:
+        offsets |= {o + s for o in offsets for s in (-step, step)}
+    for offset in offsets:
+        if offset == 0.0:
+            continue
+        moved = projected + offset
+        keep |= (moved >= lo) & (moved <= hi)
+    return keep
+
+
+def _slab_modifiers(keep: np.ndarray):
+    """Modifiers that drop every atom outside *keep* before PTM sees them."""
+    from ovito.modifiers import DeleteSelectedModifier
+
+    remove = (~np.asarray(keep, dtype=bool)).astype(int)
+
+    def select_outside(frame, data):
+        data.particles_.create_property("Selection", data=remove)
+
+    return [select_outside, DeleteSelectedModifier()]
+
+
 def _all_type_codes():
     from ovito.modifiers import PolyhedralTemplateMatchingModifier as P
 
@@ -217,6 +285,7 @@ def analyse(
     other_color=DEFAULT_OTHER_COLOR,
     only=None,
     progress=None,
+    slab=None,
 ):
     """Identify structures with PTM and assign inverse pole figure colours.
 
@@ -245,6 +314,15 @@ def analyse(
         wants a progress bar gets stage boundaries here and has to interpolate
         between them; the atom count arrives with the second stage, which is
         what makes an estimate of the third possible at all.
+    slab
+        Optional ``dict(normal=, low=, high=, margin=, rotation=)`` restricting
+        PTM to the atoms whose projection on ``normal`` lies in ``[low, high]``
+        (either bound may be None).  The matching runs on that slab plus a
+        margin of ``margin`` angstroms (default 8) so the atoms on its faces
+        still find their neighbours, and the result is trimmed to the slab
+        itself; on a slab a tenth of the cell thick it is about ten times
+        faster than the full run.  ``rotation`` is an optional ``(matrix,
+        center)`` pair when the slab was defined on a rotated view.
 
     Returns
     -------
@@ -266,6 +344,13 @@ def analyse(
     # evaluation below does not read the file twice.
     source_data = pipeline.source.compute(frame_index)
     n_atoms = int(source_data.particles.count)
+
+    trim = None
+    if slab is not None:
+        keep, trim = _slab_masks(source_data, slab)
+        n_atoms = int(keep.sum())
+        for modifier in _slab_modifiers(keep):
+            pipeline.modifiers.append(modifier)
 
     report("polyhedral template matching", n_atoms=n_atoms)
     modifier, _ = _ptm_modifier(structure_objs, rmsd_cutoff)
@@ -291,6 +376,16 @@ def analyse(
     else:
         particle_types = np.ones(len(positions), dtype=int)
         type_names = {1: "1"}
+
+    if trim is not None:
+        # The margin atoms have done their job as neighbours; only the slab
+        # itself is the result.
+        inside = trim(positions)
+        positions = positions[inside]
+        structure_types = structure_types[inside]
+        orientations = orientations[inside]
+        rmsd = rmsd[inside]
+        particle_types = particle_types[inside]
 
     d = frame.direction(direction)
     colors = np.tile(np.asarray(other_color, dtype=float), (len(positions), 1))
@@ -322,6 +417,35 @@ def analyse(
         frame_index=frame_index,
         counts=counts,
     )
+
+
+def _slab_masks(source_data, slab: dict):
+    """The atoms PTM should see, and a function trimming a result to the slab."""
+    positions = np.asarray(source_data.particles.positions[...])
+    cell = np.asarray(source_data.cell[...]) if source_data.cell is not None else None
+    pbc = tuple(source_data.cell.pbc) if source_data.cell is not None else (False,) * 3
+    normal = np.asarray(slab["normal"], dtype=float)
+    low, high = slab.get("low"), slab.get("high")
+    rotation = slab.get("rotation")
+    if rotation is not None and rotation[1] is None:
+        from .transform import rotation_center
+
+        rotation = (np.asarray(rotation[0], dtype=float), rotation_center(cell, positions))
+    keep = slab_mask(
+        positions,
+        normal,
+        low,
+        high,
+        margin=float(slab.get("margin", 8.0)),
+        cell=cell,
+        pbc=pbc,
+        rotation=rotation,
+    )
+
+    def trim(kept_positions):
+        return slab_mask(kept_positions, normal, low, high, rotation=rotation)
+
+    return keep, trim
 
 
 #: American spelling, for convenience.
@@ -396,6 +520,44 @@ def list_columns(source, frame_index: int = 0) -> dict:
     }
 
 
+class _SubsetParticles:
+    """A particles container whose columns are read through a boolean mask.
+
+    Lets :func:`analyse_orientations` trim a file to a slab before it reads
+    the structure and RMSD columns, without copying OVITO's container.
+    """
+
+    def __init__(self, particles, mask):
+        self._particles = particles
+        self._mask = np.asarray(mask, dtype=bool)
+
+    def __contains__(self, name):
+        return name in self._particles
+
+    def __getitem__(self, name):
+        return _MaskedProperty(self._particles[name], self._mask)
+
+    @property
+    def positions(self):
+        return _MaskedProperty(self._particles.positions, self._mask)
+
+    @property
+    def count(self):
+        return int(self._mask.sum())
+
+
+class _MaskedProperty:
+    def __init__(self, prop, mask):
+        self._prop = prop
+        self._mask = mask
+
+    def __getitem__(self, key):
+        return np.asarray(self._prop[key])[self._mask]
+
+    def __getattr__(self, name):
+        return getattr(self._prop, name)
+
+
 def _resolve_column(particles, name: str) -> np.ndarray:
     """A per-atom column by name, accepting ``Property.Component`` as well.
 
@@ -466,6 +628,7 @@ def analyse_orientations(
     frame_index: int = 0,
     other_color=DEFAULT_OTHER_COLOR,
     only=None,
+    slab=None,
 ):
     """Colour a file whose orientations were computed somewhere else.
 
@@ -484,6 +647,9 @@ def analyse_orientations(
         names the phase when the file has no structure column;
         ``structure_type`` names that column when it has one, and its codes are
         read as OVITO's PTM codes.  ``rmsd`` names an RMSD column if there is one.
+    slab
+        As for :func:`analyse`; here it is only a subset, since nothing is
+        computed that a margin could help.
 
     Notes
     -----
@@ -507,10 +673,20 @@ def analyse_orientations(
     n_atoms = len(positions)
 
     orientations = _gather_quaternions(particles, columns, n_atoms)
+    if slab is not None:
+        _, trim = _slab_masks(data, slab)
+        inside = trim(positions)
+        positions = positions[inside]
+        orientations = orientations[inside]
+        n_atoms = len(positions)
+        inside_particles = _SubsetParticles(particles, inside)
+    else:
+        inside_particles = particles
     norms = np.linalg.norm(orientations, axis=1)
     indexed = norms > 1e-6
 
     type_codes = _all_type_codes()
+    particles = inside_particles
     name_of_column = columns.get("structure_type")
     if name_of_column:
         structure_types = _resolve_column(particles, name_of_column).astype(int).reshape(-1)

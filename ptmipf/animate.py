@@ -261,17 +261,19 @@ def _pad_to_common_size(pngs):
             canvas.save(p)
 
 
-def write_video(pngs, out, fps: int = 4):
-    """Join PNGs into an MP4 (via imageio/ffmpeg) or a GIF (via Pillow)."""
+def write_video(pngs, out, fps: float = 4):
+    """Join PNGs into an MP4 (via imageio/ffmpeg) or a GIF (via Pillow).
+
+    *fps* may be fractional: a frame every two seconds is ``fps=0.5``.
+    """
     out = Path(out)
     _pad_to_common_size(pngs)
     if out.suffix.lower() == ".gif":
         from PIL import Image
 
         frames = [Image.open(p).convert("P", palette=Image.ADAPTIVE) for p in pngs]
-        frames[0].save(
-            out, save_all=True, append_images=frames[1:], duration=int(1000 / fps), loop=0
-        )
+        duration = max(1, int(round(1000 / fps)))
+        frames[0].save(out, save_all=True, append_images=frames[1:], duration=duration, loop=0)
         return str(out)
     try:
         import imageio.v2 as imageio

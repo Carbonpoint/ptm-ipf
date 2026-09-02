@@ -22,6 +22,12 @@ const state = {
   columns: null,       // the file's columns and the mapping controls built from them
   customColormap: null,  // name of a colour scale uploaded this session
   colormapTarget: null,  // which select opened the upload dialog
+  status: { text: "idle", kind: "" },   // what the header says when nothing is running
+  slice: { axis: null, low: null, high: null },  // extent of the atoms along the slice normal
+  series: null,          // the frames the open file belongs to, from /api/series
+  seriesPath: null,      // the file that series was detected for
+  seriesRunning: false,
+  poleFamily: null,      // Laue family the pole list was last initialised for
 };
 
 /* ------------------------------------------------------------------ */
@@ -53,6 +59,82 @@ function setStatus(text, kind) {
   const el = $("status");
   el.textContent = text;
   el.className = "status" + (kind ? " " + kind : "");
+  state.status = { text, kind: kind || "" };
+}
+
+/* ------------------------------------------------------------------ */
+/* the job tracker in the header                                      */
+/* ------------------------------------------------------------------ */
+/* Everything slow happens on the server, so the browser only knows that a
+ * request is outstanding.  Each one registers here while it runs; the header
+ * lists them over an indeterminate bar, and the card it belongs to shows a
+ * spinner.  A PTM run or a series render owns the bar instead, with the real
+ * fraction. */
+const jobs = new Map();
+let jobSerial = 0;
+
+function beginJob(label, busyId) {
+  const id = ++jobSerial;
+  jobs.set(id, label);
+  if (busyId && $(busyId)) $(busyId).hidden = false;
+  renderJobs();
+  return id;
+}
+
+function endJob(id, busyId) {
+  jobs.delete(id);
+  if (busyId && $(busyId)) $(busyId).hidden = true;
+  renderJobs();
+}
+
+function renderJobs() {
+  if (state.running || state.seriesRunning) return;
+  const bar = $("header-progress");
+  if (jobs.size) {
+    bar.hidden = false;
+    bar.removeAttribute("value");
+    const labels = [...new Set(jobs.values())];
+    const text = labels.join(", ") + "...";
+    $("status").textContent = text;
+    $("status").className = "status busy";
+    return;
+  }
+  bar.hidden = true;
+  bar.value = 0;
+  // An error that arrived while a job ran must not be wiped by its completion.
+  if ($("status").className.includes("error")) return;
+  $("status").textContent = state.status.text;
+  $("status").className = "status" + (state.status.kind ? " " + state.status.kind : "");
+}
+
+/* Fetch an image into an <img> with its card marked busy.  Responses that
+ * arrive after a newer request for the same image are dropped, so a slow
+ * old frame never overwrites the current one. */
+const imageSerial = {};
+async function loadImage(imgId, url, busyId, label) {
+  const serial = (imageSerial[imgId] || 0) + 1;
+  imageSerial[imgId] = serial;
+  const job = beginJob(label, busyId);
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(await errorMessage(response));
+    const blob = await response.blob();
+    if (imageSerial[imgId] !== serial) return null;
+    const img = $(imgId);
+    const old = img.src;
+    img.src = URL.createObjectURL(blob);
+    if (old && old.startsWith("blob:")) URL.revokeObjectURL(old);
+    return response;
+  } finally {
+    endJob(job, busyId);
+  }
+}
+
+// A URLSearchParams as a plain object, which is what the series job takes.
+function paramsObject(params) {
+  const out = {};
+  for (const [key, value] of params) if (key !== "gen") out[key] = value;
+  return out;
 }
 
 function hexToRgb(hex) {
@@ -74,7 +156,18 @@ function analysisParams() {
     rmsd_cutoff: parseFloat($("rmsd").value) || 0,
     frame_index: parseInt($("frame-index").value, 10) || 0,
     columns: columnMapping(),
+    slab: null,
   };
+}
+
+/* The slice as an analysis restriction: PTM then runs on those atoms alone
+ * (plus a margin so the neighbours at the faces are right). */
+function sliceSlab() {
+  if (!sliceActive()) return null;
+  const axis = $("slice-axis").value.trim();
+  const distance = parseFloat($("slice-distance").value);
+  if (!Number.isFinite(distance)) return null;
+  return { axis, distance, width: parseFloat($("slice-width").value) || 0 };
 }
 
 function colourParams() {
@@ -90,11 +183,13 @@ function colourParams() {
     axes,
     color_only: only.length && only.length < all ? only : null,
     other_color: hexToRgb($("other-color").value),
+    rotations: rotationParams(),
   };
 }
 
 function uiOptions() {
-  const sliced = $("slice-on").checked && $("slice-axis").value.trim();
+  const sliced = sliceActive();
+  const tripod = paramsObject(tripodParams(new URLSearchParams()));
   return {
     poles: $("poles").value.split(",").map((p) => p.trim()).filter(Boolean),
     pole_mode: $("pole-mode").value,
@@ -103,7 +198,10 @@ function uiOptions() {
     render_size: viewSize(),
     hide_other: $("hide-other").checked,
     slice_axis: sliced ? $("slice-axis").value.trim() : null,
+    slice_distance: sliced ? parseFloat($("slice-distance").value) : null,
     slice_width: sliced ? parseFloat($("slice-width").value) || null : null,
+    tripod: Boolean(tripod.tripod),
+    tripod_axes: tripod.tripod_axes ? tripod.tripod_axes.split(";") : null,
     fill_radius: $("fill-on").checked ? parseFloat($("fill-radius").value) || 6 : null,
     fill_min_neighbours: parseInt($("fill-min").value, 10) || 3,
     export_directions: exportDirections(),
@@ -118,8 +216,14 @@ function exportDirections() {
 /* ------------------------------------------------------------------ */
 /* analysis + status polling                                          */
 /* ------------------------------------------------------------------ */
-async function runAnalysis(full) {
-  const analysis = full || !state.analysed ? analysisParams() : state.analysed;
+async function runAnalysis(full, slab) {
+  let analysis;
+  if (full || !state.analysed) {
+    analysis = analysisParams();
+    analysis.slab = slab === undefined ? null : slab;
+  } else {
+    analysis = state.analysed;
+  }
   if (!analysis.path) { setStatus("choose a configuration file first", "error"); return; }
   try {
     const outcome = await postJSON("/api/analyse", { ...analysis, ...colourParams() });
@@ -144,7 +248,11 @@ function pollUntilDone() {
       clearInterval(timer);
       state.running = false;
       showProgress(null);
-      if (status.state === "error") { setStatus("analysis failed: " + status.error, "error"); return; }
+      if (status.state === "error") {
+        setStatus("analysis failed: " + status.error, "error");
+        renderJobs();
+        return;
+      }
       applyStatus(status);
     } catch (error) {
       clearInterval(timer);
@@ -161,10 +269,18 @@ function pollUntilDone() {
  * measurement. */
 function showProgress(status) {
   const bar = $("analysis-progress");
-  if (!status) { bar.hidden = true; bar.value = 0; return; }
+  const header = $("header-progress");
+  if (!status) {
+    bar.hidden = true; bar.value = 0;
+    if (!state.seriesRunning) { header.hidden = true; header.value = 0; }
+    renderJobs();
+    return;
+  }
   const fraction = typeof status.progress === "number" ? status.progress : 0;
   bar.hidden = false;
   bar.value = fraction;
+  header.hidden = false;
+  header.value = fraction;
   const percent = Math.round(100 * fraction);
   const left = status.stage_remaining > 1
     ? `, about ${Math.ceil(status.stage_remaining)} s left in this step`
@@ -185,18 +301,28 @@ function applyStatus(status) {
     structures: status.result.structures,
     rmsd_cutoff: analysisParams().rmsd_cutoff,
     frame_index: analysisParams().frame_index,
+    columns: columnMapping(),
+    slab: status.result.slab || null,
   };
   state.selectionCount = status.selection ? status.selection.count : null;
   updateSummary(status.result);
   updateSelectionCount();
   $("cmd-button").disabled = false;
-  if (status.generation !== state.generation) {
-    state.generation = status.generation;
-    updateColorMapLink();
-    refreshAll();
-  }
-  setStatus(`${status.result.n_atoms.toLocaleString()} atoms · IPF ` +
+  const changed = status.generation !== state.generation;
+  state.generation = status.generation;
+  const slab = status.result.slab;
+  const full = status.result.full_n_atoms;
+  const sliceNote = slab
+    ? ` (slice along ${slab.axis}` + (full ? ` of ${full.toLocaleString()}` : "") + ")"
+    : "";
+  setStatus(`${status.result.n_atoms.toLocaleString()} atoms${sliceNote} · IPF ` +
             status.result.direction_label, "");
+  if (changed) {
+    updateColorMapLink();
+    updateSliceBounds().then(refreshAll);
+    updateSeriesFromPath();
+  }
+  syncAnalyseSlice();
 }
 
 function updateSummary(result) {
@@ -226,6 +352,44 @@ function updateSummary(result) {
   state.dominant = dominant;
   populateStructureSelects(result.colorable, dominant);
   populateTypeOptions(result.type_names);
+  initialisePoles(dominant);
+}
+
+/* ------------------------------------------------------------------ */
+/* pole families                                                      */
+/* ------------------------------------------------------------------ */
+function laueOf(structure) {
+  const entry = (state.meta.structures || []).find((s) => s.name === structure);
+  return entry ? entry.laue : null;
+}
+
+/* The pole list starts from the family of the structure that dominates the
+ * result, so an aluminium cell does not open with hexagonal poles. */
+function initialisePoles(dominant) {
+  const family = laueOf(dominant);
+  if (!family || family === state.poleFamily) return;
+  const presets = (state.meta.defaults.pole_presets || {})[family] || [];
+  state.poleFamily = family;
+  if (presets.length) $("poles").value = presets.slice(0, 3).join(",");
+  fillPolePresets(family);
+}
+
+function fillPolePresets(family) {
+  const select = $("pole-preset");
+  const presets = (state.meta.defaults.pole_presets || {})[family] || [];
+  select.replaceChildren(new Option("add a family...", ""));
+  for (const pole of presets) select.add(new Option(pole, pole));
+}
+
+function addPolePreset() {
+  const select = $("pole-preset");
+  const pole = select.value;
+  select.value = "";
+  if (!pole) return;
+  const poles = $("poles").value.split(",").map((p) => p.trim()).filter(Boolean);
+  if (!poles.includes(pole)) poles.push(pole);
+  $("poles").value = poles.join(",");
+  debouncedFigures();
 }
 
 /* ------------------------------------------------------------------ */
@@ -251,15 +415,234 @@ function viewQuery(extra) {
     highlight: $("highlight-mode").value,
     gen: state.generation,
   });
-  if ($("slice-on").checked && $("slice-axis").value.trim()) {
-    params.set("slice_axis", $("slice-axis").value.trim());
-    params.set("slice_frac", ($("slice-frac").value / 100).toFixed(3));
-    params.set("slice_width", $("slice-width").value || 0);
-  }
+  sliceParams(params);
   addFillParams(params);
-  if ($("tripod") && $("tripod").checked) params.set("tripod", 1);
+  tripodParams(params);
   for (const [key, value] of Object.entries(extra || {})) params.set(key, value);
   return params;
+}
+
+/* ------------------------------------------------------------------ */
+/* the slice                                                          */
+/* ------------------------------------------------------------------ */
+/* One slice serves the 3D view, the pole figures, the IPF density and the
+ * IPF map.  The slider places the plane as a fraction of the atoms' extent
+ * along the normal; the number box says where that is in angstroms, and
+ * either can be edited.  The extent comes from the server once per normal. */
+function sliceActive() {
+  return $("slice-on").checked && Boolean($("slice-axis").value.trim());
+}
+
+function sliceParams(params) {
+  if (!sliceActive()) return params;
+  const axis = $("slice-axis").value.trim();
+  params.set("slice_axis", axis);
+  const distance = parseFloat($("slice-distance").value);
+  if (Number.isFinite(distance) && state.slice.axis === axis && state.slice.low !== null) {
+    params.set("slice_distance", distance.toFixed(3));
+  } else {
+    params.set("slice_frac", ($("slice-frac").value / 100).toFixed(3));
+  }
+  params.set("slice_width", $("slice-width").value || 0);
+  return params;
+}
+
+function figuresSliced() {
+  return sliceActive() && $("slice-figures").checked;
+}
+
+async function updateSliceBounds() {
+  if (state.generation < 0 || !sliceActive()) return;
+  const axis = $("slice-axis").value.trim();
+  try {
+    const bounds = await api("/api/slicebounds?axis=" + encodeURIComponent(axis) +
+                             "&gen=" + state.generation);
+    state.slice = { axis, low: bounds.min, high: bounds.max };
+    const box = $("slice-distance");
+    box.min = bounds.min;
+    box.max = bounds.max;
+    // A number typed before the bounds were known keeps its meaning; the
+    // slider follows it.  Otherwise the slider's position is what counts.
+    const typed = parseFloat(box.value);
+    if (box.dataset.typed === "1" && Number.isFinite(typed)) syncSliceSlider();
+    else syncSliceNumber();
+  } catch (error) {
+    state.slice = { axis: null, low: null, high: null };
+  }
+  syncAnalyseSlice();
+}
+
+function syncSliceNumber() {
+  const { low, high } = state.slice;
+  if (low === null) return;
+  const fraction = $("slice-frac").value / 100;
+  $("slice-distance").value = (low + fraction * (high - low)).toFixed(2);
+  $("slice-distance").dataset.typed = "0";
+}
+
+function syncSliceSlider() {
+  const { low, high } = state.slice;
+  const distance = parseFloat($("slice-distance").value);
+  if (low === null || !Number.isFinite(distance) || high <= low) return;
+  const fraction = Math.max(0, Math.min(1, (distance - low) / (high - low)));
+  $("slice-frac").value = Math.round(100 * fraction);
+}
+
+function syncAnalyseSlice() {
+  $("analyse-slice").disabled = state.generation < 0 || !sliceActive() ||
+    !Number.isFinite(parseFloat($("slice-distance").value));
+}
+
+function refreshSliced() {
+  refreshView();
+  if ($("slice-figures").checked) {
+    refreshFigures();
+    // The IPF map is drawn on request; once it has been, it follows the slice.
+    if (state.flatDrawn) refreshFlatMap();
+  }
+  syncAnalyseSlice();
+}
+
+/* ------------------------------------------------------------------ */
+/* the triad                                                          */
+/* ------------------------------------------------------------------ */
+function tripodParams(params) {
+  if (!$("tripod").checked) return params;
+  params.set("tripod", 1);
+  const mode = $("tripod-mode").value;
+  if (mode === "cell") {
+    params.set("tripod_axes", "x;y;z");
+  } else if (mode === "custom") {
+    const axes = [], labels = [];
+    for (const i of [1, 2, 3]) {
+      const axis = $("tripod-axis-" + i).value.trim();
+      if (!axis) continue;
+      axes.push(axis);
+      labels.push($("tripod-label-" + i).value.trim());
+    }
+    if (axes.length) params.set("tripod_axes", axes.join(";"));
+    if (labels.some(Boolean)) params.set("tripod_labels", labels.join(";"));
+  }
+  params.set("tripod_size", ($("tripod-size").value / 100).toFixed(2));
+  params.set("tripod_x", ($("tripod-x").value / 100).toFixed(2));
+  params.set("tripod_y", ($("tripod-y").value / 100).toFixed(2));
+  return params;
+}
+
+function bindTripod() {
+  $("tripod-advanced-toggle").addEventListener("click", () => {
+    $("tripod-advanced").hidden = !$("tripod-advanced").hidden;
+  });
+  $("tripod-mode").addEventListener("change", () => {
+    $("tripod-custom").hidden = $("tripod-mode").value !== "custom";
+    debouncedView();
+  });
+  for (const id of ["tripod-size", "tripod-x", "tripod-y"]) {
+    $(id).addEventListener("input", () => {
+      $(id + "-value").textContent = ($(id).value / 100).toFixed(2);
+      debouncedView();
+    });
+  }
+  for (const i of [1, 2, 3]) {
+    $("tripod-axis-" + i).addEventListener("change", debouncedView);
+    $("tripod-label-" + i).addEventListener("change", debouncedView);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* system rotations                                                   */
+/* ------------------------------------------------------------------ */
+function addRotation(axis, angle) {
+  const row = document.createElement("div");
+  row.className = "rotation row wrap";
+  const axisInput = document.createElement("input");
+  axisInput.type = "text";
+  axisInput.value = axis || "z";
+  axisInput.size = 5;
+  axisInput.spellcheck = false;
+  axisInput.dataset.field = "axis";
+  axisInput.title = "rotation axis: x, y, z, rd, td, nd or a vector such as 1,1,0";
+  const angleInput = document.createElement("input");
+  angleInput.type = "number";
+  angleInput.step = "any";
+  angleInput.value = angle || 0;
+  angleInput.dataset.field = "angle";
+  angleInput.title = "angle in degrees, right-handed about the axis";
+  const unit = document.createElement("span");
+  unit.className = "muted";
+  unit.textContent = "\u00b0";
+  const kill = document.createElement("button");
+  kill.className = "small ghost kill";
+  kill.textContent = "\u00d7";
+  kill.title = "remove this rotation";
+  kill.addEventListener("click", () => { row.remove(); debouncedColour(); });
+  row.append("about ", axisInput, " by ", angleInput, unit, kill);
+  $("rotations").append(row);
+  attachVectorBoxes(axisInput);
+  axisInput.addEventListener("change", debouncedColour);
+  angleInput.addEventListener("change", debouncedColour);
+  return row;
+}
+
+function rotationParams() {
+  const out = [];
+  for (const row of document.querySelectorAll("#rotations .rotation")) {
+    const axis = row.querySelector('[data-field="axis"]').value.trim();
+    const angle = parseFloat(row.querySelector('[data-field="angle"]').value);
+    if (axis && Number.isFinite(angle) && angle !== 0) out.push([axis, angle]);
+  }
+  return out;
+}
+
+function setRotations(rotations) {
+  $("rotations").replaceChildren();
+  for (const [axis, angle] of rotations || []) addRotation(axis, angle);
+}
+
+/* ------------------------------------------------------------------ */
+/* vectors by component                                               */
+/* ------------------------------------------------------------------ */
+/* Every direction box takes a name or a vector as text; this adds a small
+ * "xyz" button beside it that opens three component boxes, for people who
+ * think in components rather than in comma-separated strings. */
+function attachVectorBoxes(input) {
+  if (input.dataset.vectorBound) return;
+  input.dataset.vectorBound = "1";
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "small ghost vec-toggle";
+  toggle.textContent = "xyz";
+  toggle.title = "enter the direction as x, y, z components";
+  const boxes = document.createElement("span");
+  boxes.className = "vec-boxes";
+  boxes.hidden = true;
+  const fields = ["x", "y", "z"].map((name) => {
+    const field = document.createElement("input");
+    field.type = "number";
+    field.step = "any";
+    field.placeholder = name;
+    field.title = name + " component";
+    return field;
+  });
+  boxes.append(...fields);
+  const push = () => {
+    const values = fields.map((f) => f.value.trim());
+    if (!values.every(Boolean)) return;
+    input.value = values.map((v) => String(parseFloat(v))).join(",");
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  for (const field of fields) field.addEventListener("change", push);
+  toggle.addEventListener("click", (event) => {
+    event.preventDefault();
+    boxes.hidden = !boxes.hidden;
+    if (boxes.hidden) return;
+    const parts = input.value.split(",").map(Number);
+    if (parts.length === 3 && parts.every(Number.isFinite)) {
+      fields.forEach((field, i) => { field.value = parts[i]; });
+    }
+    fields[0].focus();
+  });
+  input.after(toggle, boxes);
 }
 
 // Boundary filling changes every image the server draws, so it travels with
@@ -363,6 +746,7 @@ function flatMapQuery(extra) {
   if ($("figures-from-selection").checked && state.selectionCount !== null) {
     params.set("selection", 1);
   }
+  if (figuresSliced()) sliceParams(params);
   addFillParams(params);
   for (const [key, value] of Object.entries(extra || {})) params.set(key, value);
   return params;
@@ -372,18 +756,23 @@ async function refreshFlatMap() {
   if (state.generation < 0) return;
   const info = $("flat-info");
   info.textContent = "drawing...";
+  const sliced = figuresSliced();
+  state.flatDrawn = true;
+  $("flat-view").disabled = sliced;
+  $("flat-slab").disabled = sliced && parseFloat($("slice-width").value) > 0;
   try {
-    const response = await fetch("/api/figure/flatmap?" + flatMapQuery());
-    if (!response.ok) throw new Error(await errorMessage(response));
+    const response = await loadImage("flatmap", "/api/figure/flatmap?" + flatMapQuery(),
+                                     "flatmap-busy", "drawing the IPF map");
+    if (!response) return;
     const grains = response.headers.get("X-Grain-Count");
     const size = response.headers.get("X-Map-Size");
-    const blob = await response.blob();
-    const img = $("flatmap");
-    const old = img.src;
-    img.src = URL.createObjectURL(blob);
-    if (old && old.startsWith("blob:")) URL.revokeObjectURL(old);
+    const center = response.headers.get("X-Slab-Center");
     $("download-flat").href = "/api/figure/flatmap?" + flatMapQuery({ download: 1 });
-    info.textContent = `${grains} grains, ${size} px`;
+    $("download-flat-svg").href =
+      "/api/figure/flatmap?" + flatMapQuery({ download: 1, format: "svg" });
+    info.textContent = `${grains} grains, ${size} px` +
+      (sliced ? `, section of the slice along ${$("slice-axis").value.trim()} centred at ${center} \u00c5`
+              : "");
   } catch (error) {
     info.textContent = error.message;
   }
@@ -394,15 +783,11 @@ async function refreshView() {
   if (renderInFlight) { renderQueued = true; return; }
   renderInFlight = true;
   try {
-    const response = await fetch("/api/render?" + viewQuery());
-    if (!response.ok) throw new Error(await errorMessage(response));
-    const blob = await response.blob();
-    const img = $("view");
-    const old = img.src;
-    img.src = URL.createObjectURL(blob);
-    img.classList.add("live");
+    const response = await loadImage("view", "/api/render?" + viewQuery(),
+                                     "view-busy", "rendering the 3D view");
+    if (!response) return;
+    $("view").classList.add("live");
     $("view-placeholder").hidden = true;
-    if (old.startsWith("blob:")) URL.revokeObjectURL(old);
     $("download-view").href = "/api/render?" + viewQuery({ download: 1 });
     showViewError(null);
   } catch (error) {
@@ -430,7 +815,7 @@ function showViewError(message) {
   const hint = document.createElement("p");
   hint.className = "muted";
   hint.textContent = "Run  ptmipf-ui --check  in the same environment to see what is " +
-    "missing. The plots, the flat orientation map and the exports do not need a " +
+    "missing. The plots, the IPF map and the exports do not need a " +
     "renderer and still work.";
   box.append(title, detail, hint);
   box.hidden = false;
@@ -484,11 +869,7 @@ async function pickAtom(event) {
     hide_other: $("hide-other").checked,
     highlight: $("highlight-mode").value,
   };
-  if ($("slice-on").checked && $("slice-axis").value.trim()) {
-    body.slice_axis = $("slice-axis").value.trim();
-    body.slice_frac = $("slice-frac").value / 100;
-    body.slice_width = Number($("slice-width").value) || 0;
-  }
+  Object.assign(body, paramsObject(sliceParams(new URLSearchParams())));
   try {
     const outcome = await postJSON("/api/pick", body);
     showAtomInfo(outcome.atom);
@@ -544,36 +925,62 @@ function figureQuery(extra) {
   if ($("figures-from-selection").checked && state.selectionCount !== null) {
     params.set("selection", 1);
   }
+  if (figuresSliced()) sliceParams(params);
+  addFillParams(params);
   for (const [key, value] of Object.entries(extra || {})) if (value) params.set(key, value);
   return params;
 }
 
-function refreshFigures() {
-  if (state.generation < 0) return;
-  const legend = "/api/figure/legend?" + figureQuery({ structure: $("legend-structure").value });
-  $("legend").src = legend;
-  $("download-legend").href = legend + "&download=1";
+function legendQuery() {
+  return figureQuery({ structure: $("legend-structure").value });
+}
 
-  const density = "/api/figure/ipfdensity?" + figureQuery({
+function densityQuery() {
+  return figureQuery({
     structure: $("pole-structure").value,
     cmap: $("density-cmap").value,
     smoothing: $("density-smoothing").value,
   });
-  $("density").src = density;
-  $("download-density").href = density + "&download=1";
+}
 
+function polesQuery() {
   const poles = $("poles").value.split(",").map((p) => p.trim()).filter(Boolean);
-  if (poles.length) {
-    const url = "/api/figure/poles?" + figureQuery({
-      poles: poles.join(","),
-      mode: $("pole-mode").value,
-      structure: $("pole-structure").value,
-      c_over_a: $("c-over-a").value,
-      cmap: $("pole-cmap").value,
-      smoothing: $("pole-smoothing").value,
-    });
-    $("polefig").src = url;
-    $("download-poles").href = url + "&download=1";
+  if (!poles.length) return null;
+  return figureQuery({
+    poles: poles.join(","),
+    mode: $("pole-mode").value,
+    structure: $("pole-structure").value,
+    c_over_a: $("c-over-a").value,
+    cmap: $("pole-cmap").value,
+    smoothing: $("pole-smoothing").value,
+    up: $("pole-up").value.trim(),
+    right: $("pole-right").value.trim(),
+  });
+}
+
+function setDownloads(prefix, url) {
+  $(prefix).href = url + "&download=1";
+  $(prefix + "-svg").href = url + "&download=1&format=svg";
+}
+
+function refreshFigures() {
+  if (state.generation < 0) return;
+  const legend = "/api/figure/legend?" + legendQuery();
+  setDownloads("download-legend", legend);
+  loadImage("legend", legend, "legend-busy", "drawing the colour key")
+    .catch((error) => setStatus("colour key: " + error.message, "error"));
+
+  const density = "/api/figure/ipfdensity?" + densityQuery();
+  setDownloads("download-density", density);
+  loadImage("density", density, "density-busy", "drawing the IPF density")
+    .catch((error) => setStatus("IPF density: " + error.message, "error"));
+
+  const poles = polesQuery();
+  if (poles) {
+    const url = "/api/figure/poles?" + poles;
+    setDownloads("download-poles", url);
+    loadImage("polefig", url, "polefig-busy", "drawing the pole figures")
+      .catch((error) => setStatus("pole figures: " + error.message, "error"));
   }
 }
 
@@ -786,7 +1193,7 @@ async function openBrowser(path) {
       const target = listing.path ? listing.path + "/" + entry.name : entry.name;
       li.addEventListener("click", () => {
         if (entry.dir) openBrowser(target);
-        else { $("path").value = target; dialog.close(); }
+        else { $("path").value = target; dialog.close(); detectSeries(target); }
       });
       items.push(li);
     }
@@ -983,6 +1390,225 @@ function buildColumnMap(info) {
 }
 
 /* ------------------------------------------------------------------ */
+/* trajectory series                                                  */
+/* ------------------------------------------------------------------ */
+/* Once a frame has been analysed the server is asked which frames the file
+ * belongs to: numbered siblings (dump_0, dump_20, dump_100) or the frames
+ * inside it.  Stepping re-runs the analysis with the current settings; the
+ * batch card renders any range of them with the same settings. */
+const SERIES_OUTPUTS = [
+  ["view", "3D IPF map", ["png", "gif", "mp4"]],
+  ["ipfmap", "IPF map", ["png", "svg", "gif", "mp4"]],
+  ["poles", "Pole figures", ["png", "svg", "gif", "mp4"]],
+  ["density", "IPF density", ["png", "svg", "gif", "mp4"]],
+  ["legend", "Colour key", ["png", "svg"]],
+];
+
+function updateSeriesFromPath() {
+  const path = state.analysed ? state.analysed.path : $("path").value.trim();
+  if (!path || path === state.seriesPath) return;
+  state.seriesPath = path;
+  detectSeries(path);
+}
+
+async function detectSeries(path) {
+  try {
+    state.series = await api("/api/series?path=" + encodeURIComponent(path));
+  } catch (error) {
+    state.series = null;
+  }
+  renderSeries();
+}
+
+function seriesCurrentIndex() {
+  const series = state.series;
+  if (!series || !series.items.length) return -1;
+  const path = state.analysed ? state.analysed.path : $("path").value.trim();
+  const frame = parseInt($("frame-index").value, 10) || 0;
+  const index = series.items.findIndex((item) =>
+    series.kind === "frames" ? item.frame_index === frame
+                             : path.endsWith(item.path));
+  return index < 0 ? series.current : index;
+}
+
+function renderSeries() {
+  const series = state.series;
+  const nav = $("series-nav");
+  const card = $("series-card");
+  const items = series ? series.items : [];
+  if (!items.length) {
+    nav.hidden = true;
+    card.classList.add("inactive");
+    $("series-card-info").textContent = state.generation < 0
+      ? "analyse a frame first"
+      : "this file is not part of a numbered series and holds a single frame";
+    $("series-run").disabled = true;
+    return;
+  }
+  nav.hidden = false;
+  card.classList.remove("inactive");
+  const current = seriesCurrentIndex();
+  const options = () => items.map((item, i) => new Option(item.label, String(i)));
+  $("series-select").replaceChildren(...options());
+  $("series-select").value = String(current);
+  $("series-prev").disabled = current <= 0;
+  $("series-next").disabled = current >= items.length - 1;
+  $("series-info").textContent = series.kind === "files"
+    ? `${items.length} files, ${items[0].label} to ${items[items.length - 1].label}`
+    : `${items.length} frames in this file`;
+  const keepStart = $("series-start").value, keepStop = $("series-stop").value;
+  $("series-start").replaceChildren(...options());
+  $("series-stop").replaceChildren(...options());
+  $("series-start").value = keepStart && Number(keepStart) < items.length ? keepStart : "0";
+  $("series-stop").value = keepStop && Number(keepStop) < items.length
+    ? keepStop : String(items.length - 1);
+  $("series-card-info").textContent = `${items.length} frames`;
+  if (!$("series-outdir").value) $("series-outdir").placeholder = series.stem + "_series";
+  $("series-run").disabled = state.seriesRunning;
+}
+
+function gotoSeriesItem(index) {
+  const series = state.series;
+  if (!series || index < 0 || index >= series.items.length) return;
+  const item = series.items[index];
+  if (series.kind === "files") $("path").value = item.path;
+  $("frame-index").value = item.frame_index;
+  runAnalysis(true, state.analysed ? state.analysed.slab : null);
+}
+
+function buildSeriesOutputs() {
+  const box = $("series-outputs");
+  for (const [kind, label, formats] of SERIES_OUTPUTS) {
+    const row = document.createElement("div");
+    row.className = "row wrap output-row";
+    const name = document.createElement("span");
+    name.className = "output-name";
+    name.textContent = label;
+    row.append(name);
+    for (const ext of formats) {
+      const check = document.createElement("label");
+      check.className = "inline";
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.value = `${kind}:${ext}`;
+      input.checked = (kind === "view" && ext === "png") || (kind === "ipfmap" && ext === "gif");
+      check.append(input, ext === "gif" || ext === "mp4" ? `${ext} movie` : `${ext} stills`);
+      row.append(check);
+    }
+    box.append(row);
+  }
+}
+
+async function startSeries() {
+  const series = state.series;
+  if (!series || !series.items.length) return;
+  const outputs = [...document.querySelectorAll("#series-outputs input:checked")]
+    .map((el) => el.value);
+  const body = {
+    path: state.analysed ? state.analysed.path : $("path").value.trim(),
+    start: parseInt($("series-start").value, 10) || 0,
+    stop: parseInt($("series-stop").value, 10) || 0,
+    step: parseInt($("series-step").value, 10) || 1,
+    outputs,
+    seconds_per_frame: parseFloat($("series-seconds").value) || 0.5,
+    label: $("series-stamp").checked,
+    out_dir: $("series-outdir").value.trim() || null,
+    view_query: paramsObject(viewQuery()),
+    ipfmap_query: paramsObject(flatMapQuery()),
+    poles_query: paramsObject(polesQuery() || figureQuery()),
+    density_query: paramsObject(densityQuery()),
+    legend_query: paramsObject(legendQuery()),
+  };
+  try {
+    await postJSON("/api/series/render", body);
+    $("series-files").replaceChildren();
+    $("series-zip").hidden = true;
+    pollSeries();
+  } catch (error) {
+    $("series-status").textContent = error.message;
+    $("series-status").className = "error-text note";
+  }
+}
+
+function pollSeries() {
+  if (state.seriesTimer) return;
+  state.seriesRunning = true;
+  $("series-run").disabled = true;
+  $("series-cancel").disabled = false;
+  state.seriesTimer = setInterval(async () => {
+    let status;
+    try {
+      status = await api("/api/series/status");
+    } catch (error) {
+      status = { state: "error", error: error.message, files: [] };
+    }
+    showSeries(status);
+    if (status.state !== "running") {
+      clearInterval(state.seriesTimer);
+      state.seriesTimer = null;
+      state.seriesRunning = false;
+      $("series-run").disabled = false;
+      $("series-cancel").disabled = true;
+      $("header-progress").hidden = true;
+      renderJobs();
+    }
+  }, 1000);
+}
+
+function showSeries(status) {
+  const bar = $("series-progress");
+  const note = $("series-status");
+  const running = status.state === "running";
+  bar.hidden = !running && !status.files.length;
+  bar.value = status.progress || 0;
+  const header = $("header-progress");
+  if (running) {
+    header.hidden = false;
+    header.value = status.progress || 0;
+    const left = status.seconds_per_item
+      ? `, about ${Math.ceil(status.seconds_per_item * (status.n_items - status.item))} s left`
+      : "";
+    const text = `series ${status.item + 1}/${status.n_items} ${status.label}: ${status.stage}${left}`;
+    $("status").textContent = text;
+    $("status").className = "status busy";
+    note.textContent = text;
+    note.className = "muted note";
+  } else if (status.state === "error") {
+    note.textContent = "the series failed: " + status.error;
+    note.className = "error-text note";
+  } else if (status.state === "cancelled") {
+    note.textContent = `cancelled after ${status.item} of ${status.n_items} frames`;
+    note.className = "muted note";
+  } else if (status.state === "done") {
+    note.textContent = `${status.files.length} files written to ${status.out_dir} ` +
+      `in ${status.elapsed} s`;
+    note.className = "muted note";
+  }
+  const links = status.files.map((name) => {
+    const link = document.createElement("a");
+    link.href = "/api/series/file?path=" + encodeURIComponent(name) + "&download=1";
+    link.textContent = name;
+    link.download = name;
+    link.className = "small button";
+    return link;
+  });
+  $("series-files").replaceChildren(...links);
+  $("series-zip").hidden = !status.files.length;
+  $("series-zip").href = "/api/series/zip";
+}
+
+function bindSeries() {
+  buildSeriesOutputs();
+  $("series-prev").addEventListener("click", () => gotoSeriesItem(seriesCurrentIndex() - 1));
+  $("series-next").addEventListener("click", () => gotoSeriesItem(seriesCurrentIndex() + 1));
+  $("series-select").addEventListener("change", () =>
+    gotoSeriesItem(parseInt($("series-select").value, 10)));
+  $("series-run").addEventListener("click", startSeries);
+  $("series-cancel").addEventListener("click", () => postJSON("/api/series/cancel", {}));
+  renderSeries();
+}
+
+/* ------------------------------------------------------------------ */
 /* the command line: copy, save, and read one back                     */
 /* ------------------------------------------------------------------ */
 function updateColorMapLink() {
@@ -1047,7 +1673,9 @@ function bindCommandDialog() {
       note.textContent = "applied";
       note.className = "muted";
       dialog.close();
-      if ($("cmd-apply-run").checked && $("path").value.trim()) runAnalysis(true);
+      if ($("cmd-apply-run").checked && $("path").value.trim()) {
+        runAnalysis(true, state.pendingSlab || null);
+      }
     } catch (error) {
       note.textContent = error.message;
       note.className = "error-text";
@@ -1110,6 +1738,7 @@ function applySettings(settings) {
     $("axis-" + name).value = (colour.axes && colour.axes[name]) || "";
   }
   if (colour.direction) $("direction").value = colour.direction;
+  setRotations(colour.rotations || []);
   if (colour.other_color) {
     const parts = String(colour.other_color).split(",").map(Number);
     if (parts.length === 3 && parts.every((v) => Number.isFinite(v))) {
@@ -1128,7 +1757,31 @@ function applySettings(settings) {
   $("hide-other").checked = Boolean(ui.hide_other);
   $("slice-on").checked = Boolean(ui.slice_axis);
   if (ui.slice_axis) $("slice-axis").value = ui.slice_axis;
-  if (ui.slice_width) $("slice-width").value = ui.slice_width;
+  if (ui.slice_distance !== null && ui.slice_distance !== undefined) {
+    $("slice-distance").value = ui.slice_distance;
+    $("slice-distance").dataset.typed = "1";
+  }
+  $("slice-width").value = ui.slice_width || 0;
+  state.pendingSlab = ui.ptm_slice && ui.slice_axis
+    ? { axis: ui.slice_axis, distance: ui.slice_distance || 0, width: ui.slice_width || 0 }
+    : null;
+  $("tripod").checked = Boolean(ui.tripod);
+  if (ui.tripod_axes && ui.tripod_axes.length) {
+    const axes = ui.tripod_axes.map((a) => a.split("=")[0].trim().toLowerCase());
+    if (axes.join(";") === "x;y;z") {
+      $("tripod-mode").value = "cell";
+    } else if (axes.join(";") !== "rd;td;nd") {
+      $("tripod-mode").value = "custom";
+      ui.tripod_axes.forEach((spec, i) => {
+        const [axis, label] = spec.split("=");
+        if (i < 3) {
+          $("tripod-axis-" + (i + 1)).value = axis.trim();
+          $("tripod-label-" + (i + 1)).value = (label || "").trim();
+        }
+      });
+    }
+    $("tripod-custom").hidden = $("tripod-mode").value !== "custom";
+  }
   if (ui.export_directions && ui.export_directions.length) {
     $("export-directions").value = ui.export_directions.join("; ");
     updateColorMapLink();
@@ -1164,7 +1817,11 @@ async function init() {
   const wanted = new URLSearchParams(location.search).get("path");
   if (wanted) $("path").value = wanted;
 
-  $("analyse").addEventListener("click", () => runAnalysis(true));
+  $("analyse").addEventListener("click", () => runAnalysis(true, null));
+  $("analyse-slice").addEventListener("click", () => {
+    const slab = sliceSlab();
+    if (slab) runAnalysis(true, slab);
+  });
   $("read-columns").addEventListener("click", readColumns);
   $("use-columns").addEventListener("change", () => {
     const on = $("use-columns").checked;
@@ -1191,11 +1848,26 @@ async function init() {
   }
 
   bindViewer();
+  bindTripod();
+  for (const input of document.querySelectorAll("input[data-vector]")) attachVectorBoxes(input);
+  $("add-rotation").addEventListener("click", () => addRotation("z", 0));
+  $("clear-rotations").addEventListener("click", () => { setRotations([]); debouncedColour(); });
   $("hide-other").addEventListener("change", debouncedView);
-  $("slice-on").addEventListener("change", debouncedView);
-  $("slice-axis").addEventListener("change", debouncedView);
-  $("slice-frac").addEventListener("input", debouncedView);
-  $("slice-width").addEventListener("input", debouncedView);
+  const debouncedSliced = debounce(refreshSliced, 300);
+  const sliceNormalChanged = () => updateSliceBounds().then(debouncedSliced);
+  $("slice-on").addEventListener("change", sliceNormalChanged);
+  $("slice-axis").addEventListener("change", sliceNormalChanged);
+  $("slice-frac").addEventListener("input", () => { syncSliceNumber(); debouncedSliced(); });
+  $("slice-distance").addEventListener("input", () => {
+    $("slice-distance").dataset.typed = "1";
+    syncSliceSlider();
+    debouncedSliced();
+  });
+  $("slice-width").addEventListener("input", debouncedSliced);
+  $("slice-figures").addEventListener("change", () => {
+    refreshFigures();
+    if (state.flatDrawn) refreshFlatMap();
+  });
   $("tripod").addEventListener("change", debouncedView);
   for (const id of ["fill-on", "fill-radius", "fill-min"]) {
     $(id).addEventListener("change", () => {
@@ -1216,9 +1888,12 @@ async function init() {
   $("highlight-mode").addEventListener("change", debouncedView);
 
   for (const id of ["poles", "c-over-a", "pole-mode", "pole-structure",
-                    "pole-smoothing", "density-smoothing"]) {
+                    "pole-smoothing", "density-smoothing", "pole-up", "pole-right"]) {
     $(id).addEventListener("change", debouncedFigures);
   }
+  fillPolePresets("hexagonal");
+  $("pole-preset").addEventListener("change", addPolePreset);
+  bindSeries();
   fillColormapSelects();
   bindColormapSelect("pole-cmap", debouncedFigures);
   bindColormapSelect("density-cmap", debouncedFigures);
@@ -1265,11 +1940,15 @@ async function init() {
   if (savedTheme) document.documentElement.dataset.theme = savedTheme;
 
   updateSelectionCount();
+  syncAnalyseSlice();
   checkEnvironment();
-  // Pick up an analysis that survived a page reload.
+  // Pick up an analysis, or a series render, that survived a page reload.
   const status = await api("/api/status");
   if (status.state === "running") { state.running = true; pollUntilDone(); }
   else if (status.result) applyStatus(status);
+  const series = await api("/api/series/status").catch(() => null);
+  if (series && series.state === "running") pollSeries();
+  else if (series && series.files && series.files.length) showSeries(series);
 }
 
 init().catch((error) => setStatus(error.message, "error"));

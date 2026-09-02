@@ -39,8 +39,15 @@ from ..colormap import PLOT_COLORMAPS
 from ..io import temporary_path
 from ..polefigure import IDEAL_C_OVER_A
 from ..structures import DEFAULT_STRUCTURES, STRUCTURES
+from ..transform import parse_rotation
 from . import figures, rendering
-from .state import AppState, SelectionUnavailableError
+from .state import AppState, SelectionUnavailableError, subset_result
+
+#: Pole families offered per Laue family, the first three being the default set.
+POLE_PRESETS = {
+    "cubic": ["100", "110", "111", "112", "123", "210"],
+    "hexagonal": ["0001", "10-10", "11-20", "10-11", "10-12", "11-22", "20-21"],
+}
 
 __all__ = ["main", "make_server"]
 
@@ -152,6 +159,239 @@ def _number(query: dict, name: str, default: float) -> float:
         raise ApiError(f"{name} must be a number, got {value!r}") from None
 
 
+def _list(query: dict, name: str, sep: str = ";", keep_empty: bool = False) -> list[str]:
+    """A separated list parameter; semicolons because a vector holds commas.
+
+    An empty entry is dropped unless *keep_empty*, which the tripod labels
+    need: ``RD;;custom`` keeps the default text for the middle axis.
+    """
+    raw = query.get(name, [""])[0] or ""
+    items = [item.strip() for item in raw.split(sep)]
+    if keep_empty:
+        return items if any(items) else []
+    return [item for item in items if item]
+
+
+def slice_of(result, query: dict) -> dict | None:
+    """The slice a request asks for, resolved against *result*.
+
+    ``slice_axis`` names the normal (any direction spec).  ``slice_distance``
+    places the plane in angstroms along it; without one ``slice_frac`` places
+    it as a fraction of the atoms' extent, which is what the slider sends.
+    ``slice_width`` is the slab thickness, zero meaning everything up to the
+    plane.  Every image endpoint reads the same three parameters, so the
+    3D view, the IPF map and the pole figures can all show one slice.
+    """
+    axis = query.get("slice_axis", [""])[0]
+    if not axis:
+        return None
+    normal = result.frame.direction(axis)
+    distance = query.get("slice_distance", [None])[0]
+    if distance in (None, ""):
+        low, high = rendering.slice_bounds(result, normal)
+        fraction = np.clip(_number(query, "slice_frac", 1.0), 0.0, 1.0)
+        distance = low + fraction * (high - low)
+    else:
+        distance = _number(query, "slice_distance", 0.0)
+    return {
+        "axis": axis,
+        "normal": normal,
+        "distance": float(distance),
+        "width": max(0.0, _number(query, "slice_width", 0.0)),
+    }
+
+
+def figure_result(state: AppState, query: dict, result=None, slice_atoms: bool = True):
+    """The atoms a figure is drawn from: filled, then sliced, then selected.
+
+    Filling happens before any subsetting: an atom needs its neighbours to
+    borrow an orientation from, and a slice or a selection may have removed
+    them.  A caller that does its own sectioning (the IPF map) passes
+    ``slice_atoms=False`` and reads the slice itself.
+    """
+    if result is None:
+        radius = _number(query, "fill_radius", 0.0)
+        minimum = int(_number(query, "fill_min_neighbours", 3))
+        result = state.view_result(radius or None, minimum)
+        if result is None:
+            raise ApiError("no analysis result yet", HTTPStatus.CONFLICT)
+    keep = None
+    section = slice_of(result, query) if slice_atoms else None
+    if section is not None:
+        keep = rendering.visible_mask(
+            result,
+            slice_normal=section["normal"],
+            slice_distance=section["distance"],
+            slice_width=section["width"],
+        )
+    if _flag(query, "selection"):
+        mask = state.selection_mask
+        if mask is None:
+            raise ApiError("no selection has been applied")
+        keep = mask if keep is None else keep & mask
+    if keep is None:
+        return result
+    if not keep.any():
+        raise ApiError("no atoms are left after slicing and selecting")
+    return subset_result(result, keep)
+
+
+def _figure_format(query: dict) -> str:
+    try:
+        return figures.normalise_format(query.get("format", ["png"])[0])
+    except ValueError as exc:
+        raise ApiError(str(exc)) from None
+
+
+def legend_figure(state: AppState, result, query: dict):
+    """The colour key.  Returns ``(body, format, filename, headers)``."""
+    fmt = _figure_format(query)
+    body = figures.legend_png(result, query.get("structure", [None])[0], fmt=fmt)
+    return body, fmt, f"ipf_key_{result.direction_label.lower()}.{fmt}", {}
+
+
+def poles_figure(state: AppState, result, query: dict):
+    fmt = _figure_format(query)
+    poles = [p for p in query.get("poles", ["0001"])[0].split(",") if p.strip()]
+    if not poles:
+        raise ApiError("at least one pole family is required")
+    body = figures.pole_figure_png(
+        result,
+        poles,
+        structure=query.get("structure", [None])[0],
+        c_over_a=_number(query, "c_over_a", IDEAL_C_OVER_A),
+        mode=query.get("mode", ["density"])[0],
+        smoothing=max(0.0, _number(query, "smoothing", 0.0)),
+        cmap=colormap_of(state, query, "viridis"),
+        fmt=fmt,
+        up=query.get("up", [""])[0] or None,
+        right=query.get("right", [""])[0] or None,
+    )
+    return body, fmt, f"pole_figures.{fmt}", {}
+
+
+def density_figure(state: AppState, result, query: dict):
+    fmt = _figure_format(query)
+    direction = query.get("direction", [""])[0] or state.colour_params.get("direction", "z")
+    body = figures.ipf_density_png(
+        result,
+        direction,
+        structure=query.get("structure", [None])[0],
+        smoothing=max(0.0, _number(query, "smoothing", 0.0)),
+        cmap=colormap_of(state, query, "magma"),
+        fmt=fmt,
+    )
+    return body, fmt, f"ipf_density.{fmt}", {}
+
+
+def flat_map_figure(state: AppState, result, query: dict):
+    """The flat, EBSD-style IPF map of a section.
+
+    With a slice the section is the slice: its normal is the view, a slab
+    of the slice width is mapped when there is one, and otherwise the
+    ``slab_width`` just below the cut plane, which is the face the 3D view
+    shows.
+    """
+    fmt = _figure_format(query)
+    view = query.get("view", ["z"])[0] or "z"
+    slab_width = _number(query, "slab_width", 10.0)
+    center = None
+    section = slice_of(result, query)
+    if section is not None:
+        view = section["axis"]
+        if section["width"] > 0:
+            slab_width = section["width"]
+            center = section["distance"]
+        else:
+            center = section["distance"] - slab_width / 2.0
+    body, info = figures.flat_map_png(
+        result,
+        view=view,
+        slab_width=slab_width,
+        slab_center=center,
+        pixel_size=_number(query, "pixel_size", 0.5),
+        boundary_angle=_number(query, "boundary_angle", 5.0),
+        fill_unindexed=not _flag(query, "raw"),
+        structure=query.get("structure", [None])[0],
+        title=query.get("title", [""])[0] or None,
+        fmt=fmt,
+    )
+    headers = {
+        "X-Grain-Count": str(info["n_grains"]),
+        "X-Map-Size": f"{info['columns']}x{info['rows']}",
+        "X-Slab-Center": f"{info['slab_center']:g}",
+    }
+    return body, fmt, f"ipf_map.{fmt}", headers
+
+
+FIGURES = {
+    "legend": legend_figure,
+    "poles": poles_figure,
+    "ipfdensity": density_figure,
+    "density": density_figure,
+    "flatmap": flat_map_figure,
+    "ipfmap": flat_map_figure,
+}
+
+
+def colormap_of(state: AppState, query: dict, default: str):
+    """The colour map a figure request asks for.
+
+    ``cmap=custom`` means the one uploaded in this session, which is held
+    as an array rather than a file so nothing an upload contains is ever
+    written to disk.
+    """
+    from ..colormap import load_colormap
+
+    name = query.get("cmap", [default])[0] or default
+    if name == "custom":
+        table = state.custom_colormap
+        if table is None:
+            raise ApiError("no colour map has been uploaded in this session")
+        return load_colormap(table)
+    try:
+        return load_colormap(name)
+    except ValueError as exc:
+        raise ApiError(str(exc)) from None
+
+
+def view_options(state: AppState, result, query: dict) -> dict:
+    """Decode the viewer options shared by the render, pick and series endpoints."""
+    options = {
+        "azimuth": _number(query, "az", -125.0),
+        "elevation": _number(query, "el", 20.0),
+        "zoom": _number(query, "zoom", 1.0),
+        "size": (
+            int(_number(query, "w", 900)),
+            int(_number(query, "h", 700)),
+        ),
+        "hide_other": _flag(query, "hide_other"),
+        "tripod": _flag(query, "tripod"),
+    }
+    if options["tripod"]:
+        axes = _list(query, "tripod_axes")
+        labels = _list(query, "tripod_labels", keep_empty=True)
+        if axes:
+            options["tripod_axes"] = axes
+            if labels:
+                options["tripod_labels"] = (labels + ["", "", ""])[: len(axes)]
+        options["tripod_size"] = float(np.clip(_number(query, "tripod_size", 0.11), 0.02, 0.5))
+        options["tripod_x"] = float(np.clip(_number(query, "tripod_x", 0.07), 0.0, 1.0))
+        options["tripod_y"] = float(np.clip(_number(query, "tripod_y", 0.05), 0.0, 1.0))
+    label = query.get("label", [""])[0]
+    if label:
+        options["label"] = label
+    section = slice_of(result, query)
+    if section is not None:
+        options["slice_normal"] = section["normal"]
+        options["slice_distance"] = section["distance"]
+        options["slice_width"] = section["width"]
+    mode = query.get("highlight", ["highlight"])[0]
+    options["selection_mode"] = mode
+    options["selection"] = _selection_active(state, mode)
+    return options
+
+
 class Handler(BaseHTTPRequestHandler):
     """Routes requests to the JSON API, the figure endpoints and the assets."""
 
@@ -232,7 +472,9 @@ class Handler(BaseHTTPRequestHandler):
             "/api/figure/legend": self._get_legend,
             "/api/figure/poles": self._get_poles,
             "/api/figure/ipfdensity": self._get_ipf_density,
+            "/api/figure/density": self._get_ipf_density,
             "/api/figure/flatmap": self._get_flat_map,
+            "/api/figure/ipfmap": self._get_flat_map,
             "/api/export": self._get_export,
             "/api/colormap": self._get_colormap,
             "/api/diagnostics": self._get_diagnostics,
@@ -240,6 +482,10 @@ class Handler(BaseHTTPRequestHandler):
             "/api/examples": self._get_examples,
             "/api/atom": self._get_atom,
             "/api/slicebounds": self._get_slice_bounds,
+            "/api/series": self._get_series,
+            "/api/series/status": self._get_series_status,
+            "/api/series/file": self._get_series_file,
+            "/api/series/zip": self._get_series_zip,
         }
         if url.path in routes:
             self._dispatch(routes[url.path], query)
@@ -274,6 +520,7 @@ class Handler(BaseHTTPRequestHandler):
                         "description": s.description,
                         "colorable": s.colorable,
                         "default": s.name in DEFAULT_STRUCTURES,
+                        "laue": s.laue,
                     }
                     for s in STRUCTURES.values()
                 ],
@@ -281,7 +528,11 @@ class Handler(BaseHTTPRequestHandler):
                     "rmsd_cutoff": 0.1,
                     "other_color": list(DEFAULT_OTHER_COLOR),
                     "c_over_a": round(IDEAL_C_OVER_A, 6),
-                    "poles": ["0001", "10-10", "11-20"],
+                    "poles": POLE_PRESETS["hexagonal"][:3],
+                    # Per Laue family: the families on offer, the first three
+                    # being what a fresh analysis of that family starts with.
+                    "pole_presets": POLE_PRESETS,
+                    "tripod": {"size": 0.11, "x": 0.07, "y": 0.05},
                 },
                 "colormaps": list(PLOT_COLORMAPS),
                 "selection_available": has_select,
@@ -319,32 +570,7 @@ class Handler(BaseHTTPRequestHandler):
         return result
 
     def _view_options(self, query) -> dict:
-        """Decode the viewer options shared by the render and pick endpoints."""
-        state = self.state
-        result = self._result_or_409(query)
-        options = {
-            "azimuth": _number(query, "az", -125.0),
-            "elevation": _number(query, "el", 20.0),
-            "zoom": _number(query, "zoom", 1.0),
-            "size": (
-                int(_number(query, "w", 900)),
-                int(_number(query, "h", 700)),
-            ),
-            "hide_other": _flag(query, "hide_other"),
-            "tripod": _flag(query, "tripod"),
-        }
-        axis = query.get("slice_axis", [""])[0]
-        if axis:
-            normal = result.frame.direction(axis)
-            low, high = rendering.slice_bounds(result, normal)
-            fraction = np.clip(_number(query, "slice_frac", 1.0), 0.0, 1.0)
-            options["slice_normal"] = normal
-            options["slice_distance"] = low + fraction * (high - low)
-            options["slice_width"] = max(0.0, _number(query, "slice_width", 0.0))
-        mode = query.get("highlight", ["highlight"])[0]
-        options["selection_mode"] = mode
-        options["selection"] = _selection_active(state, mode)
-        return options
+        return view_options(self.state, self._result_or_409(query), query)
 
     def _get_render(self, query):
         state = self.state
@@ -364,85 +590,37 @@ class Handler(BaseHTTPRequestHandler):
         download = "ipf_view.png" if _flag(query, "download") else None
         self._send(body, "image/png", download=download)
 
-    def _figure_result(self, query):
-        """The full result, or the current selection when ``selection=1``.
-
-        Filling happens before any subsetting: an atom needs its neighbours to
-        borrow an orientation from, and a selection may have removed them.
-        """
-        result = self._result_or_409(query)
-        if _flag(query, "selection"):
-            from .state import subset_result
-
-            mask = self.state.selection_mask
-            if mask is None:
-                raise ApiError("no selection has been applied")
-            return subset_result(result, mask)
-        return result
+    def _send_figure(self, query, outcome):
+        body, fmt, name, headers = outcome
+        download = name if _flag(query, "download") else None
+        self._send(body, figures.content_type(fmt), download=download, extra_headers=headers)
 
     def _get_legend(self, query):
         state = self.state
         with state.lock:
             result = self._result_or_409(query)
-            body = figures.legend_png(result, query.get("structure", [None])[0])
-        download = None
-        if _flag(query, "download"):
-            download = f"ipf_key_{result.direction_label.lower()}.png"
-        self._send(body, "image/png", download=download)
+            outcome = legend_figure(state, result, query)
+        self._send_figure(query, outcome)
 
     def _get_poles(self, query):
         state = self.state
         with state.lock:
-            result = self._figure_result(query)
-            poles = [p for p in query.get("poles", ["0001"])[0].split(",") if p.strip()]
-            if not poles:
-                raise ApiError("at least one pole family is required")
-            body = figures.pole_figure_png(
-                result,
-                poles,
-                structure=query.get("structure", [None])[0],
-                c_over_a=_number(query, "c_over_a", IDEAL_C_OVER_A),
-                mode=query.get("mode", ["density"])[0],
-                smoothing=max(0.0, _number(query, "smoothing", 0.0)),
-                cmap=self._colormap(query, "viridis"),
-            )
-        download = "pole_figures.png" if _flag(query, "download") else None
-        self._send(body, "image/png", download=download)
+            outcome = poles_figure(state, figure_result(state, query), query)
+        self._send_figure(query, outcome)
 
     def _get_ipf_density(self, query):
         state = self.state
         with state.lock:
-            result = self._figure_result(query)
-            direction = self.state.colour_params.get("direction", "z")
-            body = figures.ipf_density_png(
-                result,
-                direction,
-                structure=query.get("structure", [None])[0],
-                smoothing=max(0.0, _number(query, "smoothing", 0.0)),
-                cmap=self._colormap(query, "magma"),
-            )
-        download = "ipf_density.png" if _flag(query, "download") else None
-        self._send(body, "image/png", download=download)
+            outcome = density_figure(state, figure_result(state, query), query)
+        self._send_figure(query, outcome)
 
     def _get_flat_map(self, query):
-        """A flat, EBSD-style orientation map of a section."""
+        """A flat, EBSD-style IPF map of a section."""
         state = self.state
         with state.lock:
-            result = self._figure_result(query)
-            body, info = figures.flat_map_png(
-                result,
-                view=query.get("view", ["z"])[0] or "z",
-                slab_width=_number(query, "slab_width", 10.0),
-                pixel_size=_number(query, "pixel_size", 0.5),
-                boundary_angle=_number(query, "boundary_angle", 5.0),
-                fill_unindexed=not _flag(query, "raw"),
-                structure=query.get("structure", [None])[0],
-            )
-        download = "ipf_flat_map.png" if _flag(query, "download") else None
-        self._send(body, "image/png", download=download, extra_headers={
-            "X-Grain-Count": str(info["n_grains"]),
-            "X-Map-Size": f"{info['columns']}x{info['rows']}",
-        })
+            result = figure_result(state, query, slice_atoms=False)
+            outcome = flat_map_figure(state, result, query)
+        self._send_figure(query, outcome)
 
     def _get_export(self, query):
         from ..io import write_result
@@ -605,24 +783,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json(report)
 
     def _colormap(self, query, default: str):
-        """The colour map a figure request asks for.
-
-        ``cmap=custom`` means the one uploaded in this session, which is held
-        as an array rather than a file so nothing an upload contains is ever
-        written to disk.
-        """
-        from ..colormap import load_colormap
-
-        name = query.get("cmap", [default])[0] or default
-        if name == "custom":
-            table = self.state.custom_colormap
-            if table is None:
-                raise ApiError("no colour map has been uploaded in this session")
-            return load_colormap(table)
-        try:
-            return load_colormap(name)
-        except ValueError as exc:
-            raise ApiError(str(exc)) from None
+        return colormap_of(self.state, query, default)
 
     def _post_colormap(self):
         """Take a colour map uploaded from the browser, as base64.
@@ -676,6 +837,58 @@ class Handler(BaseHTTPRequestHandler):
         low, high = rendering.slice_bounds(result, normal)
         self._json({"min": round(low, 3), "max": round(high, 3)})
 
+    # -- trajectory series ---------------------------------------------
+    def _get_series(self, query):
+        """The frames a file belongs to: sibling files by number, or its own frames."""
+        from .series import detect_series
+
+        state = self.state
+        path = query.get("path", [""])[0]
+        if not path:
+            raise ApiError("a file path is required")
+        target = state.resolve(path)
+        if not target.is_file():
+            raise FileNotFoundError(f"no such file: {path}")
+        self._json(state.ovito.submit(detect_series, state, target).result())
+
+    def _get_series_status(self, query):
+        self._json(self.state.series_status())
+
+    def _get_series_file(self, query):
+        """One output of the series job, for a link or an inline preview."""
+        from .series import content_type_of
+
+        name = query.get("path", [""])[0]
+        target = self.state.series_output(name)
+        download = target.name if _flag(query, "download") else None
+        self._send(target.read_bytes(), content_type_of(target), download=download)
+
+    def _get_series_zip(self, query):
+        import io
+        import zipfile
+
+        state = self.state
+        job = state.series_job
+        if job is None or not job.files:
+            raise ApiError("no series output to download", HTTPStatus.CONFLICT)
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            for name in list(job.files):
+                target = job.out_dir / name
+                if target.is_file():
+                    archive.write(target, arcname=str(Path(job.out_dir.name) / name))
+        self._send(
+            buffer.getvalue(), "application/zip", download=f"{job.out_dir.name}.zip"
+        )
+
+    def _post_series_render(self):
+        from .series import start_series
+
+        self._json(start_series(self.state, self._body()))
+
+    def _post_series_cancel(self):
+        self._json(self.state.cancel_series())
+
     # ------------------------------------------------------------------
     # POST
     # ------------------------------------------------------------------
@@ -689,6 +902,8 @@ class Handler(BaseHTTPRequestHandler):
             "/api/command/parse": self._post_parse_command,
             "/api/examples/build": self._post_build_example,
             "/api/colormap/upload": self._post_colormap,
+            "/api/series/render": self._post_series_render,
+            "/api/series/cancel": self._post_series_cancel,
         }
         if url.path in routes:
             self._dispatch(routes[url.path])
@@ -792,6 +1007,8 @@ def build_command(state: AppState, ui: dict) -> tuple[list[str], str]:
             parts.append("--color-only " + ",".join(colour["color_only"]))
         if tuple(colour.get("other_color", DEFAULT_OTHER_COLOR)) != DEFAULT_OTHER_COLOR:
             parts.append("--other-color " + ",".join(f"{c:g}" for c in colour["other_color"]))
+        for axis, angle in colour.get("rotations") or ():
+            parts.append(f"--rotate {shlex.quote(f'{axis}:{angle:g}')}")
 
         radius = ui.get("fill_radius")
         if radius:
@@ -825,7 +1042,20 @@ def build_command(state: AppState, ui: dict) -> tuple[list[str], str]:
             parts.append(f"--render-size {int(size[0])}x{int(size[1])}")
         if ui.get("hide_other"):
             parts.append("--hide-other")
-        if ui.get("slice_axis"):
+        if ui.get("tripod"):
+            parts.append("--tripod")
+            axes = ui.get("tripod_axes") or []
+            if axes and [str(a) for a in axes] != ["rd", "td", "nd"]:
+                parts.append("--tripod-axes " + shlex.quote(";".join(str(a) for a in axes)))
+        slab = analysis.get("slab")
+        if slab:
+            # The result is the slab, so the command has to match it the same way.
+            parts.append("--ptm-slice")
+            parts.append(f"--slice {shlex.quote(str(slab['axis']))}")
+            parts.append(f"--slice-distance {float(slab['distance']):g}")
+            if slab.get("width"):
+                parts.append(f"--slice-width {float(slab['width']):g}")
+        elif ui.get("slice_axis"):
             parts.append(f"--slice {shlex.quote(str(ui['slice_axis']))}")
             if ui.get("slice_distance") is not None:
                 parts.append(f"--slice-distance {float(ui['slice_distance']):g}")
@@ -902,6 +1132,7 @@ def parse_command(text: str) -> dict:
             "axes": {k: v for k, v in axes.items() if v},
             "color_only": [s for s in (args.color_only or "").split(",") if s],
             "other_color": args.other_color,
+            "rotations": [list(parse_rotation(spec)) for spec in (args.rotate or [])],
         },
         "ui": {
             "poles": list(args.pole_figures),
@@ -910,7 +1141,13 @@ def parse_command(text: str) -> dict:
             "c_over_a": args.c_over_a,
             "hide_other": bool(args.hide_other),
             "slice_axis": args.slice_normal or "",
+            "slice_distance": args.slice_distance,
             "slice_width": args.slice_width,
+            "ptm_slice": bool(args.ptm_slice),
+            "tripod": bool(args.tripod),
+            "tripod_axes": [
+                t.strip() for t in (args.tripod_axes or "").split(";") if t.strip()
+            ],
             "view": args.view or "",
             "fill_radius": args.fill_boundaries,
             "fill_min_neighbours": args.fill_min_neighbours,
@@ -1002,7 +1239,7 @@ def _print_diagnostics() -> int:
         return 0
     print(
         "The interface will start, but the 3D view will stay empty.  The plots, the "
-        "flat orientation map and the exports do not need a renderer and still work."
+        "IPF map and the exports do not need a renderer and still work."
     )
     return 1
 

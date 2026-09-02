@@ -767,3 +767,263 @@ def test_tripod_overlay_renders_and_picking_still_works(base, analysed, renderer
         base, "/api/pick", {"x": 150, "y": 120, "w": 300, "h": 240, "tripod": True}
     )
     assert "atom" in picked or "index" in picked or picked == {}
+
+
+# ---------------------------------------------------------------------------
+# slices on every figure, vector formats, tripod options, meta additions
+# ---------------------------------------------------------------------------
+def test_meta_lists_laue_groups_and_pole_presets(base):
+    meta = _get_json(base, "/api/meta")
+    laue = {s["name"]: s["laue"] for s in meta["structures"]}
+    assert laue["fcc"] == laue["bcc"] and laue["hcp"] != laue["fcc"]
+    presets = meta["defaults"]["pole_presets"]
+    assert "0001" in presets["hexagonal"] and "111" in presets["cubic"]
+    assert meta["defaults"]["poles"] == presets["hexagonal"][:3]
+    assert set(meta["defaults"]["tripod"]) == {"size", "x", "y"}
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/figure/poles?poles=0001&slice_axis=z&slice_frac=0.5",
+        "/api/figure/ipfdensity?slice_axis=z&slice_distance=8&slice_width=6",
+        "/api/figure/legend?slice_axis=z&slice_frac=0.5",
+    ],
+)
+def test_figures_take_the_slice_of_the_view(base, analysed, path):
+    status, headers, body = _get(base, path)
+    assert status == 200
+    assert headers["Content-Type"] == "image/png"
+    assert _decode_png(body).ndim == 3
+
+
+def test_a_slice_with_no_atoms_left_is_a_message_not_a_traceback(base, analysed):
+    with pytest.raises(urllib.error.HTTPError) as excinfo:
+        _get(base, "/api/figure/poles?poles=0001&slice_axis=z&slice_distance=-500")
+    assert excinfo.value.code == 400
+    assert "no atoms" in json.loads(excinfo.value.read())["error"]
+
+
+def test_slice_bounds_take_a_vector_axis(base, analysed):
+    bounds = _get_json(base, "/api/slicebounds?axis=1,1,0")
+    assert bounds["min"] < bounds["max"]
+    _, _, body = _get(
+        base, "/api/render?w=200&h=160&slice_axis=1,1,0&slice_distance=0&slice_width=8"
+    )
+    assert _decode_png(body).shape[:2] == (160, 200)
+
+
+def test_the_flat_map_follows_the_slice(base, analysed):
+    """With a slice, the map is a section of that slab, seen along its normal."""
+    _, headers, _ = _get(
+        base,
+        "/api/figure/flatmap?view=x&pixel_size=1.0&slice_axis=z&slice_distance=8&slice_width=4",
+    )
+    assert abs(float(headers["X-Slab-Center"]) - 8.0) < 1e-6
+    _, headers, _ = _get(
+        base, "/api/figure/flatmap?view=z&pixel_size=1.0&slab_width=6&slice_axis=z&slice_distance=9"
+    )
+    # A zero-width slice ends at the plane, so the slab sits just below it.
+    assert abs(float(headers["X-Slab-Center"]) - 6.0) < 1e-6
+
+
+def test_the_ipfmap_alias_and_svg_output(base, analysed):
+    status, headers, body = _get(base, "/api/figure/ipfmap?view=z&pixel_size=1.0&format=svg")
+    assert status == 200
+    assert headers["Content-Type"].startswith("image/svg")
+    assert b"<svg" in body
+    for figure in ("poles?poles=0001", "density?", "legend?"):
+        _, headers, body = _get(base, f"/api/figure/{figure}&format=svg")
+        assert headers["Content-Type"].startswith("image/svg"), figure
+        assert b"<svg" in body, figure
+
+
+def test_pole_figures_take_the_projection_axes(base, analysed):
+    one = _decode_png(_get(base, "/api/figure/poles?poles=0001&up=rd&right=td")[2])
+    other = _decode_png(_get(base, "/api/figure/poles?poles=0001&up=1,1,0&right=nd")[2])
+    assert one.shape == other.shape
+    assert not np.allclose(one, other)
+
+
+def test_tripod_options_and_label_are_drawn(base, analysed, renderer):
+    plain = _decode_png(_get(base, "/api/render?w=300&h=240&tripod=1")[2])
+    custom = _decode_png(
+        _get(
+            base,
+            "/api/render?w=300&h=240&tripod=1&tripod_axes=x;y;1,1,0"
+            "&tripod_labels=;;loading&tripod_size=0.3&tripod_x=0.6&tripod_y=0.5"
+            "&label=frame%2042",
+        )[2]
+    )
+    assert plain.shape == custom.shape
+    assert not np.allclose(plain, custom)
+
+
+# ---------------------------------------------------------------------------
+# trajectory series
+# ---------------------------------------------------------------------------
+@pytest.fixture(scope="module")
+def series_files(served_dir):
+    """Three numbered frames of the served crystal, named so that 100 sorts after 20."""
+    atoms = ase_build.bulk("Mg", "hcp", a=3.2094, c=5.2108).repeat((4, 4, 4))
+    names = []
+    for step in (0, 20, 100):
+        name = f"dump_{step}.xyz"
+        ase_io.write(str(served_dir / name), atoms, format="extxyz")
+        names.append(name)
+    return names
+
+
+def test_a_numbered_file_series_is_detected_in_numeric_order(base, series_files):
+    series = _get_json(base, "/api/series?path=dump_20.xyz")
+    assert series["kind"] == "files"
+    assert [item["path"] for item in series["items"]] == series_files
+    assert [item["step"] for item in series["items"]] == [0, 20, 100]
+    assert series["current"] == 1
+
+
+def test_a_lone_file_is_no_series(base, analysed):
+    series = _get_json(base, "/api/series?path=crystal.xyz")
+    assert series["kind"] == "none"
+    assert series["items"] == []
+    assert series["stem"] == "crystal"
+
+
+def test_series_needs_a_path_inside_the_root(base):
+    with pytest.raises(urllib.error.HTTPError) as excinfo:
+        _get(base, "/api/series?path=../outside.xyz")
+    assert excinfo.value.code in (400, 403, 404)
+
+
+def _wait_for_series(base):
+    deadline = time.time() + 300
+    while time.time() < deadline:
+        status = _get_json(base, "/api/series/status")
+        if status["state"] not in ("running", "idle"):
+            return status
+        time.sleep(0.2)
+    pytest.fail("the series render did not finish")
+
+
+def test_a_series_renders_stills_and_a_movie(base, analysed, series_files, renderer, served_dir):
+    outcome = _post_json(
+        base,
+        "/api/series/render",
+        {
+            "path": "dump_0.xyz",
+            "start": 0,
+            "stop": 1,
+            "step": 1,
+            "outputs": ["view:png", "poles:gif", "legend:svg"],
+            "seconds_per_frame": 0.2,
+            "label": True,
+            "view_query": {"w": 160, "h": 120, "tripod": 1},
+            "poles_query": {"poles": "0001", "up": "rd", "right": "td"},
+        },
+    )
+    assert outcome["accepted"] and outcome["n_items"] == 2
+    analysed_path = _get_json(base, "/api/status")["result"]["path"]
+    status = _wait_for_series(base)
+    assert status["state"] == "done", status.get("error")
+    files = set(status["files"])
+    assert {"dump_0_view.png", "dump_20_view.png", "dump_0_legend.svg"} <= files
+    movie = [f for f in files if f.endswith(".gif")]
+    assert movie and movie[0].endswith("_poles.gif")
+    out_dir = served_dir / status["out_dir"]
+    assert (out_dir / "dump_0_view.png").stat().st_size > 0
+    # The files are served back one at a time and as a zip.
+    _, headers, body = _get(base, "/api/series/file?path=dump_0_view.png")
+    assert headers["Content-Type"] == "image/png"
+    assert _decode_png(body).shape[:2] == (120, 160)
+    _, headers, archive = _get(base, "/api/series/zip")
+    assert headers["Content-Type"] == "application/zip"
+    import zipfile
+
+    names = zipfile.ZipFile(io.BytesIO(archive)).namelist()
+    assert any(name.endswith("dump_0_view.png") for name in names)
+    # The analysis in the browser is untouched by the batch.
+    assert _get_json(base, "/api/status")["result"]["path"] == analysed_path
+
+
+def test_series_output_refuses_paths_outside_its_folder(base, analysed):
+    for name in ("../crystal.xyz", "/etc/passwd", "nope.png"):
+        with pytest.raises(urllib.error.HTTPError) as excinfo:
+            _get(base, f"/api/series/file?path={name}")
+        assert excinfo.value.code in (400, 404), name
+
+
+def test_cancelling_when_nothing_runs_is_harmless(base):
+    outcome = _post_json(base, "/api/series/cancel", {})
+    assert isinstance(outcome, dict)
+
+
+# ---------------------------------------------------------------------------
+# rotations and slab analysis: these change the server's state, so they run
+# last and put the full analysis back when they are done
+# ---------------------------------------------------------------------------
+def test_rotations_recolour_and_reach_the_command_line(base, analysed):
+    plain = _decode_png(_get(base, "/api/figure/ipfdensity")[2])
+    status = _analyse_and_wait(
+        base,
+        {
+            "path": "crystal.xyz",
+            "structures": ["hcp", "fcc"],
+            "rotations": [{"axis": "x", "angle": 90}, ["z", 0]],
+        },
+    )
+    assert status["state"] == "done", status.get("error")
+    assert status["result"]["rotations"] == [["x", 90.0]]
+    assert status["result"]["n_atoms"] == analysed["result"]["n_atoms"]
+    turned = _decode_png(_get(base, "/api/figure/ipfdensity")[2])
+    assert not np.allclose(plain, turned)
+    outcome = _post_json(base, "/api/command", {"poles": ["0001"]})
+    assert "--rotate x:90" in outcome["command"]
+    parsed = _post_json(base, "/api/command/parse", {"command": outcome["command"]})
+    assert parsed["colour"]["rotations"] == [["x", 90.0]]
+
+
+def test_a_slab_analysis_is_a_subset_of_the_full_one(base, analysed):
+    full = analysed["result"]["n_atoms"]
+    status = _analyse_and_wait(
+        base,
+        {
+            "path": "crystal.xyz",
+            "structures": ["hcp", "fcc"],
+            "slab": {"axis": "z", "distance": 10, "width": 6},
+        },
+    )
+    assert status["state"] == "done", status.get("error")
+    assert 0 < status["result"]["n_atoms"] < full
+    assert status["result"]["slab"] == {"axis": "z", "distance": 10.0, "width": 6.0}
+    assert status["result"]["full_n_atoms"] == full
+    export = _get(base, "/api/export?format=extxyz")[2]
+    assert export.split(b"\n", 1)[0] == str(status["result"]["n_atoms"]).encode()
+    outcome = _post_json(base, "/api/command", {"poles": ["0001"], "slice_axis": "z"})
+    command = outcome["command"]
+    assert "--ptm-slice" in command
+    assert "--slice z" in command and "--slice-distance 10" in command
+    assert "--slice-width 6" in command
+    parsed = _post_json(base, "/api/command/parse", {"command": command})
+    assert parsed["ui"]["ptm_slice"] is True
+    assert parsed["ui"]["slice_distance"] == 10.0
+
+
+def test_the_tripod_axes_round_trip_through_the_command(base, analysed):
+    outcome = _post_json(
+        base, "/api/command", {"tripod": True, "tripod_axes": ["x", "y", "1,1,0=loading"]}
+    )
+    assert "--tripod-axes 'x;y;1,1,0=loading'" in outcome["command"]
+    parsed = _post_json(base, "/api/command/parse", {"command": outcome["command"]})
+    assert parsed["ui"]["tripod"] is True
+    assert parsed["ui"]["tripod_axes"] == ["x", "y", "1,1,0=loading"]
+
+
+def test_the_full_analysis_comes_back_from_the_cache(base, analysed):
+    started = time.time()
+    status = _analyse_and_wait(base, {"path": "crystal.xyz", "structures": ["hcp", "fcc"]})
+    assert status["state"] == "done", status.get("error")
+    assert status["result"]["n_atoms"] == analysed["result"]["n_atoms"]
+    assert status["result"]["slab"] is None
+    assert status["result"]["full_n_atoms"] == analysed["result"]["n_atoms"]
+    # No PTM run was needed: the whole cell was already matched.
+    assert time.time() - started < 10
