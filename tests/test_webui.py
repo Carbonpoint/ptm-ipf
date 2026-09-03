@@ -1126,3 +1126,43 @@ def test_a_post_that_ignores_its_body_does_not_corrupt_the_next_request(base, an
         assert response.status == 200, path
         response.read()
     connection.close()
+
+
+def test_a_figure_drawn_once_is_not_drawn_again(base, analysed):
+    """The second identical request must come from the cache, byte for byte."""
+    first_status, first_headers, first = _get(base, "/api/figure/poles?poles=0001&smoothing=3")
+    assert first_status == 200
+    _, headers, again = _get(base, "/api/figure/poles?poles=0001&smoothing=3")
+    assert headers["X-Figure-Cache"] == "hit"
+    assert again == first
+    # A parameter that changes the image is a different figure.
+    _, headers, other = _get(base, "/api/figure/poles?poles=0001&smoothing=7")
+    assert headers["X-Figure-Cache"] == "miss"
+    assert other != first
+    # Asking to download it, or busting the browser cache, is the same image.
+    _, headers, downloaded = _get(base, "/api/figure/poles?poles=0001&smoothing=3&download=1&gen=99")
+    assert headers["X-Figure-Cache"] == "hit"
+    assert downloaded == first
+    assert "attachment" in headers["Content-Disposition"]
+
+
+def test_a_recolour_invalidates_the_cached_figures(base, analysed):
+    _, _, before = _get(base, "/api/figure/ipfdensity")
+    outcome = _post_json(
+        base, "/api/analyse", {"path": "crystal.xyz", "structures": ["hcp", "fcc"], "direction": "x"}
+    )
+    assert outcome["accepted"]
+    _, headers, after = _get(base, "/api/figure/ipfdensity")
+    assert headers["X-Figure-Cache"] == "miss"
+    assert after != before
+    # Put the direction back for the tests that follow.
+    _post_json(
+        base, "/api/analyse", {"path": "crystal.xyz", "structures": ["hcp", "fcc"], "direction": "z"}
+    )
+
+
+def test_the_cache_is_bounded_and_reports_itself(base, analysed):
+    probe = _get_json(base, "/api/diagnostics")
+    assert "figure_cache" in probe
+    assert probe["figure_cache"]["entries"] >= 0
+    assert probe["figure_cache"]["bytes"] <= 192 << 20

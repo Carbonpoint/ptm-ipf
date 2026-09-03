@@ -243,6 +243,22 @@ def _figure_format(query: dict) -> str:
         raise ApiError(str(exc)) from None
 
 
+#: Query parameters that do not change the image itself, so a figure drawn
+#: with one value of them answers a request with another.
+_NOT_IN_THE_IMAGE = {"gen", "download", "_"}
+
+
+def _figure_key(query: dict):
+    """The part of a request that decides what the figure looks like."""
+    return tuple(
+        sorted(
+            (name, tuple(values))
+            for name, values in query.items()
+            if name not in _NOT_IN_THE_IMAGE
+        )
+    )
+
+
 def _width_px(query: dict) -> int | None:
     """How many pixels across a PNG is asked to be, if it was asked at all.
 
@@ -613,37 +629,60 @@ class Handler(BaseHTTPRequestHandler):
         extra = {"X-Render-Warning": "; ".join(warnings).replace("\n", " ")} if warnings else None
         self._send(body, "image/png", download=download, extra_headers=extra)
 
-    def _send_figure(self, query, outcome):
+    def _send_figure(self, query, outcome, cached=False):
         body, fmt, name, headers = outcome
         download = name if _flag(query, "download") else None
+        headers = dict(headers or {})
+        headers["X-Figure-Cache"] = "hit" if cached else "miss"
         self._send(body, figures.content_type(fmt), download=download, extra_headers=headers)
 
-    def _get_legend(self, query):
+    def _figure(self, kind: str, query: dict, draw):
+        """Serve one figure, drawing it only if it is not already drawn.
+
+        Every setting that changes a figure is either in the query or in the
+        generation counter, which moves on any change to the result, the
+        colouring or the selection, so a key of the two is enough to know that
+        a stored figure is still the right answer.  Dragging a slider back and
+        forth, or asking for the same figure as SVG after PNG, then costs
+        nothing.
+        """
         state = self.state
+        key = (kind, state.generation, state.colormap_generation, _figure_key(query))
+        outcome = state.figures.get(key)
+        if outcome is not None:
+            self._send_figure(query, outcome, cached=True)
+            return
         with state.lock:
-            result = self._result_or_409(query)
-            outcome = legend_figure(state, result, query)
+            outcome = draw(state, query)
+        state.figures.put(key, outcome)
         self._send_figure(query, outcome)
+
+    def _get_legend(self, query):
+        self._figure(
+            "legend",
+            query,
+            lambda state, q: legend_figure(state, self._result_or_409(q), q),
+        )
 
     def _get_poles(self, query):
-        state = self.state
-        with state.lock:
-            outcome = poles_figure(state, figure_result(state, query), query)
-        self._send_figure(query, outcome)
+        self._figure(
+            "poles", query, lambda state, q: poles_figure(state, figure_result(state, q), q)
+        )
 
     def _get_ipf_density(self, query):
-        state = self.state
-        with state.lock:
-            outcome = density_figure(state, figure_result(state, query), query)
-        self._send_figure(query, outcome)
+        self._figure(
+            "ipfdensity",
+            query,
+            lambda state, q: density_figure(state, figure_result(state, q), q),
+        )
 
     def _get_flat_map(self, query):
         """A flat, EBSD-style IPF map of a section."""
-        state = self.state
-        with state.lock:
-            result = figure_result(state, query, slice_atoms=False)
-            outcome = flat_map_figure(state, result, query)
-        self._send_figure(query, outcome)
+        self._figure(
+            "flatmap",
+            query,
+            lambda state, q: flat_map_figure(state, figure_result(state, q, slice_atoms=False), q),
+        )
 
     def _get_export(self, query):
         from ..io import write_result
@@ -847,6 +886,7 @@ class Handler(BaseHTTPRequestHandler):
 
         with self.state.lock:
             self.state.custom_colormap = table
+            self.state.colormap_generation += 1
         self._json({"name": name, "entries": int(len(table))})
 
     def _get_atom(self, query):

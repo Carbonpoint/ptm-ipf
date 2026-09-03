@@ -25,6 +25,7 @@ from __future__ import annotations
 import dataclasses
 import threading
 import time
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -313,6 +314,67 @@ STAGES = (
 _SEED_RATES = {"read": 4.0e7, "ptm": 2.5e5, "colour": 5.0e5}
 
 
+class FigureCache:
+    """The last few figures that were drawn, keyed on what they were drawn from.
+
+    Nothing about a figure changes unless its settings or the result change,
+    and both are in the key, so a figure that has been drawn once can be
+    served again as it stands.  That is what makes going back to a previous
+    setting, or asking for the same figure in a second format, instant instead
+    of a second full computation.
+
+    Bounded by total size rather than by entry count, because the figures range
+    from a few tens of kilobytes on screen to several megabytes at 600 dpi.
+    """
+
+    def __init__(self, budget: int = 192 << 20) -> None:
+        self.budget = int(budget)
+        self.entries: OrderedDict = OrderedDict()
+        self.size = 0
+        self.hits = 0
+        self.misses = 0
+        self._lock = threading.Lock()
+
+    def get(self, key):
+        with self._lock:
+            item = self.entries.get(key)
+            if item is None:
+                self.misses += 1
+                return None
+            self.entries.move_to_end(key)
+            self.hits += 1
+            return item
+
+    def put(self, key, value) -> None:
+        body = value[0]
+        cost = len(body) if body is not None else 0
+        if cost > self.budget:  # one enormous figure must not empty the cache
+            return
+        with self._lock:
+            if key in self.entries:
+                self.size -= len(self.entries[key][0])
+            self.entries[key] = value
+            self.entries.move_to_end(key)
+            self.size += cost
+            while self.size > self.budget and len(self.entries) > 1:
+                _, dropped = self.entries.popitem(last=False)
+                self.size -= len(dropped[0])
+
+    def clear(self) -> None:
+        with self._lock:
+            self.entries.clear()
+            self.size = 0
+
+    def stats(self) -> dict:
+        with self._lock:
+            return {
+                "entries": len(self.entries),
+                "bytes": self.size,
+                "hits": self.hits,
+                "misses": self.misses,
+            }
+
+
 class AppState:
     """Cached analysis result, selection and job status behind one lock."""
 
@@ -340,6 +402,12 @@ class AppState:
         # A colour map uploaded this session, as an (n, 3) array.  Kept in
         # memory rather than written anywhere, and gone when the server stops.
         self.custom_colormap = None
+        # Bumped when a colour map is uploaded, so that a figure cached with
+        # the previous one under the same name is not served again.
+        self.colormap_generation = 0
+        # Finished figures, keyed on their settings and the generation they
+        # were drawn from; see FigureCache.
+        self.figures = FigureCache()
         # The batch render of a trajectory series, if one has been started.
         self.series_job = None
         # The child process the analysis runs in, so that it can be stopped;
@@ -809,6 +877,7 @@ class AppState:
         probe["root"] = str(self.root)
         # Whether an analysis can be stopped once it is inside OVITO, which
         # depends on the child process being usable here.
+        probe["figure_cache"] = self.figures.stats()
         probe["stoppable"] = bool(self.worker.available)
         probe["stop_note"] = self.worker_note or self.worker.reason
         return probe

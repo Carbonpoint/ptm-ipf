@@ -236,7 +236,10 @@ class SeriesJob(threading.Thread):
             base = state.ovito.submit(
                 run_ptm, self.analysis, self.colour, path=path, frame_index=item["frame_index"]
             ).result()
-            result = derive_result(base, self.colour)
+            # run_ptm has already coloured along the requested direction, so
+            # only a rotation needs the colours worked out again: this was a
+            # second full colouring pass on every frame of the series.
+            result = derive_result(base, self.colour) if self.colour.get("rotations") else base
             result = self._filled(result)
             for kind in sorted(set(self.stills) | set(self.movies)):
                 self.stage = f"rendering {OUTPUTS[kind]['label']}"
