@@ -47,7 +47,18 @@ header):
   the same way. A selection belongs to one frame and is not carried over.
 * **Busy indicators**: anything that takes longer than a moment shows a
   spinner on the card it will replace, and the header lists the jobs in
-  flight with the progress bar that the PTM run uses.
+  flight with the progress bar that the PTM run uses. Times are given in
+  whichever unit reads best: seconds, then minutes, then hours.
+* **Stop and Run again**: *Stop* abandons what the page is waiting for and
+  ends the analysis. The matching runs in a child process precisely so that
+  it can be stopped: OVITO offers no way to interrupt a running pipeline, so
+  the process is killed outright and a fresh one takes the next job. The
+  result that was already on screen stays. *Run again* matches the file once
+  more with the settings as they now stand, ignoring every result cached this
+  session, which is the way to force a fresh run after editing something the
+  interface would otherwise recolour. If the child process cannot be started
+  the analysis runs in the server itself and can then only stop between
+  stages; *Check the environment* reports which of the two applies.
 * **Every CLI option is a control**: the structures PTM identifies, the RMSD
   cutoff, colour-only, the "other" colour, the RD/TD/ND/ED sample frame
   definitions, and the IPF projection direction (axis buttons or any vector).
@@ -98,6 +109,15 @@ header):
   input for non-ideal lattices and a density or scatter mode. Every figure
   has PNG and SVG download buttons, the rendered view a PNG one, and the
   coloured configuration exports to `.xyz` or `.dump`.
+* **Saved image size**: the gear beside any PNG button sets the size of every
+  image the page saves: 300 or 600 dpi at full (190 mm) or half (90 mm)
+  journal width, 1920 x 1080, 3840 x 2160, or a size of your own. A figure is
+  enlarged by raising its resolution rather than its dimensions, so the
+  layout, the fonts and the line weights keep their proportions and the
+  figure printed at the width it was asked for has exactly that resolution.
+  What is shown on screen stays at screen size, so the page keeps up, and the
+  setting is remembered in the browser and used by a series render too. SVG
+  is vector and ignores it.
 * **Selections**: build up a selection from structure, particle type, RMSD
   range, spatial slab, orientation within a tolerance of a sample direction
   ("the basal-oriented grains"), or misorientation from a reference
@@ -164,7 +184,8 @@ IPF density and the colour key, each as PNG or SVG stills or as a GIF or MP4
 movie (MP4 needs `imageio[ffmpeg]`, as `--animate` does). Several
 outputs can be produced in one run. Stills are written one per frame as
 `<frame>_<kind>.<ext>`, movies as `<series>_<kind>.<ext>`, into the output
-folder (`<series>_series` beside the files by default). *Label frames* stamps
+folder (`<series>_series` beside the files by default), at the size the gear
+beside the PNG buttons sets. *Label frames* stamps
 each frame with its name. The card shows the progress, an estimate of the
 time remaining, and the finished files, which can be opened one by one or
 downloaded together as a zip. Rendering runs on the server one frame at a

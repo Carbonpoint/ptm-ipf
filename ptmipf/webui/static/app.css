@@ -447,3 +447,11 @@ label.inline .vec-boxes input[type="number"] { width: 3.6rem; }
 /* The busy overlays and vector boxes set their own display, which would win
    over the browser's [hidden] rule and leave them showing all the time. */
 [hidden] { display: none !important; }
+
+button.danger { border-color: var(--danger, #b5423a); color: var(--danger, #b5423a); }
+button.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger, #b5423a) 12%, transparent); }
+
+button.gear { padding: 0.1rem 0.35rem; line-height: 1; font-size: 0.95rem; }
+#size-options { display: flex; flex-direction: column; gap: 0.25rem; margin: 0.5rem 0; }
+#size-dialog .row { flex-wrap: wrap; gap: 0.35rem; align-items: center; }
+#size-dialog input[type="number"] { width: 6rem; }

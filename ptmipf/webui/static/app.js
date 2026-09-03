@@ -28,6 +28,7 @@ const state = {
   seriesPath: null,      // the file that series was detected for
   seriesRunning: false,
   poleFamily: null,      // Laue family the pole list was last initialised for
+  exportSize: null,      // {label, width, height} for saved images; null = screen size
 };
 
 /* ------------------------------------------------------------------ */
@@ -88,6 +89,7 @@ function endJob(id, busyId) {
 }
 
 function renderJobs() {
+  syncRunControls();
   if (state.running || state.seriesRunning) return;
   const bar = $("header-progress");
   if (jobs.size) {
@@ -111,12 +113,17 @@ function renderJobs() {
  * arrive after a newer request for the same image are dropped, so a slow
  * old frame never overwrites the current one. */
 const imageSerial = {};
+/* Every fetch in flight, so that Stop can abandon the lot: the server finishes
+ * the image it is drawing, but the page stops waiting for it. */
+const inFlight = new Set();
 async function loadImage(imgId, url, busyId, label) {
   const serial = (imageSerial[imgId] || 0) + 1;
   imageSerial[imgId] = serial;
   const job = beginJob(label, busyId);
+  const controller = new AbortController();
+  inFlight.add(controller);
   try {
-    const response = await fetch(url);
+    const response = await fetch(url, { signal: controller.signal });
     if (!response.ok) throw new Error(await errorMessage(response));
     const blob = await response.blob();
     if (imageSerial[imgId] !== serial) return null;
@@ -125,9 +132,50 @@ async function loadImage(imgId, url, busyId, label) {
     img.src = URL.createObjectURL(blob);
     if (old && old.startsWith("blob:")) URL.revokeObjectURL(old);
     return response;
+  } catch (error) {
+    if (error.name === "AbortError") return null;
+    throw error;
   } finally {
+    inFlight.delete(controller);
     endJob(job, busyId);
   }
+}
+
+/* Stop everything the page is waiting for, and ask the server to stop the
+ * analysis.  The analysis runs in its own process and is killed outright;
+ * an image already being drawn is finished by the server and dropped here,
+ * because a half-written PNG is worth nobody's time. */
+async function stopWork() {
+  for (const controller of [...inFlight]) controller.abort();
+  inFlight.clear();
+  jobs.clear();
+  for (const id of ["view-busy", "legend-busy", "density-busy", "polefig-busy", "flatmap-busy"]) {
+    if ($(id)) $(id).hidden = true;
+  }
+  state.running = false;
+  showProgress(null);
+  try {
+    const outcome = await postJSON("/api/cancel", {});
+    setStatus(outcome.stopped ? "stopped" : "nothing was running", "");
+  } catch (error) {
+    setStatus(error.message, "error");
+  }
+  syncRunControls();
+}
+
+/* Match the file again from scratch, ignoring every cached result. */
+function rerunAnalysis() {
+  const slab = state.analysed ? state.analysed.slab : null;
+  runAnalysis(true, slab, true);
+}
+
+/* Stop is offered only while something is outstanding, Run again only once
+ * there is something to run. */
+function syncRunControls() {
+  const busy = state.running || jobs.size > 0 || state.seriesRunning;
+  $("stop").hidden = !busy;
+  $("analyse").disabled = state.running;
+  $("rerun").disabled = state.running || !state.analysed;
 }
 
 // A URLSearchParams as a plain object, which is what the series job takes.
@@ -216,7 +264,7 @@ function exportDirections() {
 /* ------------------------------------------------------------------ */
 /* analysis + status polling                                          */
 /* ------------------------------------------------------------------ */
-async function runAnalysis(full, slab) {
+async function runAnalysis(full, slab, force) {
   let analysis;
   if (full || !state.analysed) {
     analysis = analysisParams();
@@ -226,10 +274,12 @@ async function runAnalysis(full, slab) {
   }
   if (!analysis.path) { setStatus("choose a configuration file first", "error"); return; }
   try {
-    const outcome = await postJSON("/api/analyse", { ...analysis, ...colourParams() });
+    const outcome = await postJSON("/api/analyse",
+                                   { ...analysis, ...colourParams(), force: !!force });
     if (!outcome.accepted) { setStatus(outcome.reason, "error"); return; }
     if (outcome.recoloured) { await refreshStatus(); return; }
     state.running = true;
+    syncRunControls();
     setStatus("running polyhedral template matching…", "busy");
     pollUntilDone();
   } catch (error) {
@@ -248,6 +298,13 @@ function pollUntilDone() {
       clearInterval(timer);
       state.running = false;
       showProgress(null);
+      syncRunControls();
+      if (status.state === "cancelled") {
+        // Stop already said so; whatever was on screen before is still valid.
+        setStatus("stopped", "");
+        renderJobs();
+        return;
+      }
       if (status.state === "error") {
         setStatus("analysis failed: " + status.error, "error");
         renderJobs();
@@ -258,6 +315,7 @@ function pollUntilDone() {
       clearInterval(timer);
       state.running = false;
       showProgress(null);
+      syncRunControls();
       setStatus(error.message, "error");
     }
   }, 500);
@@ -267,6 +325,17 @@ function pollUntilDone() {
  * each stage from a throughput it calibrates on earlier runs.  That makes the
  * number an estimate, and the wording says so rather than implying a
  * measurement. */
+/* A duration in the unit that reads best: seconds up to 100, then minutes up
+ * to 100, then hours.  "about 4200 s left" tells nobody anything useful. */
+function duration(seconds) {
+  const value = Math.max(0, Number(seconds) || 0);
+  if (value < 100) return `${Math.ceil(value)} s`;
+  const minutes = value / 60;
+  if (minutes < 100) return `${minutes < 10 ? minutes.toFixed(1) : Math.round(minutes)} min`;
+  const hours = minutes / 60;
+  return `${hours < 10 ? hours.toFixed(1) : Math.round(hours)} h`;
+}
+
 function showProgress(status) {
   const bar = $("analysis-progress");
   const header = $("header-progress");
@@ -283,10 +352,10 @@ function showProgress(status) {
   header.value = fraction;
   const percent = Math.round(100 * fraction);
   const left = status.stage_remaining > 1
-    ? `, about ${Math.ceil(status.stage_remaining)} s left in this step`
+    ? `, about ${duration(status.stage_remaining)} left in this step`
     : "";
   setStatus(
-    `${status.stage}… roughly ${percent}%${left} (${status.elapsed.toFixed(0)} s so far)`,
+    `${status.stage}… roughly ${percent}%${left} (${duration(status.elapsed)} so far)`,
     "busy");
 }
 
@@ -296,6 +365,7 @@ async function refreshStatus() {
 
 function applyStatus(status) {
   if (!status.result) return;
+  syncRunControls();
   state.analysed = {
     path: status.result.path,
     structures: status.result.structures,
@@ -767,7 +837,8 @@ async function refreshFlatMap() {
     const grains = response.headers.get("X-Grain-Count");
     const size = response.headers.get("X-Map-Size");
     const center = response.headers.get("X-Slab-Center");
-    $("download-flat").href = "/api/figure/flatmap?" + flatMapQuery({ download: 1 });
+    $("download-flat").href =
+      "/api/figure/flatmap?" + exportParams(flatMapQuery({ download: 1 }), false);
     $("download-flat-svg").href =
       "/api/figure/flatmap?" + flatMapQuery({ download: 1, format: "svg" });
     info.textContent = `${grains} grains, ${size} px` +
@@ -788,7 +859,7 @@ async function refreshView() {
     if (!response) return;
     $("view").classList.add("live");
     $("view-placeholder").hidden = true;
-    $("download-view").href = "/api/render?" + viewQuery({ download: 1 });
+    $("download-view").href = "/api/render?" + exportParams(viewQuery({ download: 1 }), true);
     // A decoration OVITO would not draw is a note, not a failure: the view is
     // there, so say what is missing from it and leave it on screen.
     showViewError(response.headers.get("X-Render-Warning") || null, true);
@@ -967,8 +1038,117 @@ function polesQuery() {
   });
 }
 
+/* Sizes a saved image can be asked for.  A journal wants a figure of a stated
+ * physical width at a stated resolution, which is a pixel count: 190 mm at
+ * 300 dpi is 2244 px.  A talk or a screen wants pixels outright.  The height
+ * matters only for the 3D view, which is a photograph of a scene rather than
+ * a plot with its own proportions. */
+const SIZE_PRESETS = [
+  { id: "screen", label: "screen size (fastest)", width: null, height: null,
+    note: "what the page is showing, about 1000 px across" },
+  { id: "full300", label: "300 dpi, full page width (190 mm)", width: 2244, height: 1683 },
+  { id: "full600", label: "600 dpi, full page width (190 mm)", width: 4488, height: 3366 },
+  { id: "half300", label: "300 dpi, half page width (90 mm)", width: 1063, height: 797 },
+  { id: "half600", label: "600 dpi, half page width (90 mm)", width: 2126, height: 1594 },
+  { id: "hd", label: "1920 x 1080 (HD)", width: 1920, height: 1080 },
+  { id: "uhd", label: "3840 x 2160 (4K)", width: 3840, height: 2160 },
+  { id: "custom", label: "custom", width: null, height: null },
+];
+
+/* The size parameters a saved image carries: a pixel width for the plots,
+ * which keep their own proportions, and both dimensions for the 3D view. */
+function exportParams(params, isView) {
+  const size = state.exportSize;
+  if (!size || !size.width) return params;
+  if (isView) {
+    params.set("w", Math.round(size.width));
+    params.set("h", Math.round(size.height || size.width * 0.75));
+  } else {
+    params.set("width", Math.round(size.width));
+  }
+  return params;
+}
+
+function sizeLabel() {
+  const size = state.exportSize;
+  return size && size.width ? size.label : "screen size";
+}
+
+function buildSizeOptions() {
+  const box = $("size-options");
+  box.replaceChildren();
+  const current = state.exportSize ? state.exportSize.id : "screen";
+  for (const preset of SIZE_PRESETS) {
+    const row = document.createElement("label");
+    row.className = "output-row";
+    const radio = document.createElement("input");
+    radio.type = "radio";
+    radio.name = "size-preset";
+    radio.value = preset.id;
+    radio.checked = preset.id === current;
+    const text = document.createElement("span");
+    text.textContent = preset.label +
+      (preset.width ? ` (${preset.width} x ${preset.height} px)` : "");
+    row.append(radio, text);
+    box.append(row);
+  }
+  $("size-note").textContent = "Saving at " + sizeLabel() + ".";
+}
+
+function chosenSize() {
+  const picked = document.querySelector("input[name=size-preset]:checked");
+  const id = picked ? picked.value : "screen";
+  const preset = SIZE_PRESETS.find((p) => p.id === id) || SIZE_PRESETS[0];
+  if (id === "screen") return null;
+  if (id === "custom") {
+    const width = Math.max(100, Math.min(12000, Number($("size-width").value) || 2244));
+    const height = Math.max(100, Math.min(12000, Number($("size-height").value) || 1683));
+    return { id, label: `${width} x ${height} px`, width, height };
+  }
+  return { id, label: preset.label, width: preset.width, height: preset.height };
+}
+
+function openSizeDialog() {
+  buildSizeOptions();
+  $("size-dialog").showModal();
+}
+
+function bindSizeDialog() {
+  for (const id of ["size-view", "size-legend", "size-density", "size-poles", "size-flat"]) {
+    if ($(id)) $(id).addEventListener("click", openSizeDialog);
+  }
+  $("size-apply").addEventListener("click", () => {
+    state.exportSize = chosenSize();
+    try {
+      localStorage.setItem("ptmipf-export-size", JSON.stringify(state.exportSize));
+    } catch (error) { /* a browser with storage switched off is no reason to stop */ }
+    $("size-dialog").close();
+    setStatus("images will be saved at " + sizeLabel(), "");
+    refreshDownloadLinks();
+  });
+  $("size-close").addEventListener("click", () => $("size-dialog").close());
+  try {
+    const saved = JSON.parse(localStorage.getItem("ptmipf-export-size") || "null");
+    if (saved && saved.width) state.exportSize = saved;
+  } catch (error) { /* an unreadable setting is simply not restored */ }
+}
+
+/* The links carry the size, so they have to be rebuilt when it changes. */
+function refreshDownloadLinks() {
+  if (state.generation < 0) return;
+  $("download-view").href = "/api/render?" + exportParams(viewQuery({ download: 1 }), true);
+  const legend = "/api/figure/legend?" + legendQuery();
+  setDownloads("download-legend", legend);
+  setDownloads("download-density", "/api/figure/ipfdensity?" + densityQuery());
+  setDownloads("download-poles", "/api/figure/poles?" + polesQuery());
+  $("download-flat").href =
+    "/api/figure/flatmap?" + exportParams(flatMapQuery({ download: 1 }), false);
+}
+
 function setDownloads(prefix, url) {
-  $(prefix).href = url + "&download=1";
+  const size = state.exportSize && state.exportSize.width
+    ? "&width=" + Math.round(state.exportSize.width) : "";
+  $(prefix).href = url + "&download=1" + size;
   $(prefix + "-svg").href = url + "&download=1&format=svg";
 }
 
@@ -1522,11 +1702,12 @@ async function startSeries() {
     seconds_per_frame: parseFloat($("series-seconds").value) || 0.5,
     label: $("series-stamp").checked,
     out_dir: $("series-outdir").value.trim() || null,
-    view_query: paramsObject(viewQuery()),
-    ipfmap_query: paramsObject(flatMapQuery()),
-    poles_query: paramsObject(polesQuery() || figureQuery()),
-    density_query: paramsObject(densityQuery()),
-    legend_query: paramsObject(legendQuery()),
+    // A batch render is a saved image, so it takes the chosen size too.
+    view_query: paramsObject(exportParams(viewQuery(), true)),
+    ipfmap_query: paramsObject(exportParams(flatMapQuery(), false)),
+    poles_query: paramsObject(exportParams(polesQuery() || figureQuery(), false)),
+    density_query: paramsObject(exportParams(densityQuery(), false)),
+    legend_query: paramsObject(exportParams(legendQuery(), false)),
   };
   try {
     await postJSON("/api/series/render", body);
@@ -1575,7 +1756,7 @@ function showSeries(status) {
     header.hidden = false;
     header.value = status.progress || 0;
     const left = status.seconds_per_item
-      ? `, about ${Math.ceil(status.seconds_per_item * (status.n_items - status.item))} s left`
+      ? `, about ${duration(status.seconds_per_item * (status.n_items - status.item))} left`
       : "";
     const text = `series ${status.item + 1}/${status.n_items} ${status.label}: ${status.stage}${left}`;
     $("status").textContent = text;
@@ -1590,7 +1771,7 @@ function showSeries(status) {
     note.className = "muted note";
   } else if (status.state === "done") {
     note.textContent = `${status.files.length} files written to ${status.out_dir} ` +
-      `in ${status.elapsed} s`;
+      `in ${duration(status.elapsed)}`;
     note.className = "muted note";
   }
   const links = status.files.map((name) => {
@@ -1831,6 +2012,9 @@ async function init() {
     const slab = sliceSlab();
     if (slab) runAnalysis(true, slab);
   });
+  bindSizeDialog();
+  $("stop").addEventListener("click", stopWork);
+  $("rerun").addEventListener("click", rerunAnalysis);
   $("read-columns").addEventListener("click", readColumns);
   $("use-columns").addEventListener("change", () => {
     const on = $("use-columns").checked;
@@ -1955,6 +2139,7 @@ async function init() {
   const status = await api("/api/status");
   if (status.state === "running") { state.running = true; pollUntilDone(); }
   else if (status.result) applyStatus(status);
+  syncRunControls();
   const series = await api("/api/series/status").catch(() => null);
   if (series && series.state === "running") pollSeries();
   else if (series && series.files && series.files.length) showSeries(series);

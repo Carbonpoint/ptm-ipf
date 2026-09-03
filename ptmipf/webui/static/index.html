@@ -43,6 +43,10 @@
       <button id="analyse" class="primary">Analyse</button>
       <button id="analyse-slice" class="small" disabled
         title="Run the analysis on the atoms in the slice only (set a slice in the 3D view first). Faster, and every later figure works on the slice alone.">Analyse slice</button>
+      <button id="stop" class="small danger" hidden
+        title="Stop what the server is doing now. The analysis runs in its own process and is killed outright; images already asked for are abandoned.">Stop</button>
+      <button id="rerun" class="small" disabled
+        title="Match the file again from scratch with the settings as they now stand, ignoring everything cached this session.">Run again</button>
     </span>
     <progress id="analysis-progress" max="1" value="0" hidden></progress>
     <div id="summary" class="summary" hidden>
@@ -222,7 +226,8 @@
           <button id="view-z" class="small">Z</button>
         </span>
         <button id="reset-view" class="small" title="Reset the camera">reset</button>
-        <a id="download-view" class="small button" title="Download this view as PNG" download>PNG</a>
+        <button id="size-view" class="small gear" title="Choose the size and resolution of the images this page saves">&#9881;</button>
+          <a id="download-view" class="small button" title="Download this view as PNG" download>PNG</a>
       </span>
     </div>
     <div id="tripod-advanced" class="advanced" hidden>
@@ -266,6 +271,7 @@
       <div class="card-head"><h2>Colour key</h2>
         <span class="row">
           <select id="legend-structure" title="structure of the colour key"></select>
+          <button id="size-legend" class="small gear" title="Choose the size and resolution of the images this page saves">&#9881;</button>
           <a id="download-legend" class="small button" download>PNG</a>
           <a id="download-legend-svg" class="small button" download>SVG</a>
         </span>
@@ -281,6 +287,7 @@
             <input id="density-smoothing" type="number" min="0" max="40" step="0.5" value="0"
                    size="3"></label>
           <span class="muted">&deg;</span>
+          <button id="size-density" class="small gear" title="Choose the size and resolution of the images this page saves">&#9881;</button>
           <a id="download-density" class="small button" download>PNG</a>
           <a id="download-density-svg" class="small button" download>SVG</a>
         </span>
@@ -308,6 +315,7 @@ texture; a few degrees brings the intensities onto a comparable scale.">smooth
             <input id="pole-smoothing" type="number" min="0" max="40" step="0.5" value="0"
                    size="3"></label>
           <span class="muted">&deg;</span>
+          <button id="size-poles" class="small gear" title="Choose the size and resolution of the images this page saves">&#9881;</button>
           <a id="download-poles" class="small button" download>PNG</a>
           <a id="download-poles-svg" class="small button" download>SVG</a>
         </span>
@@ -331,6 +339,7 @@ texture; a few degrees brings the intensities onto a comparable scale.">smooth
           <label class="inline" title="paint unindexed atoms black instead of filling">
             <input id="flat-raw" type="checkbox"> raw</label>
           <button id="flat-draw" class="small">draw</button>
+          <button id="size-flat" class="small gear" title="Choose the size and resolution of the images this page saves">&#9881;</button>
           <a id="download-flat" class="small button" download>PNG</a>
           <a id="download-flat-svg" class="small button" download>SVG</a>
         </span>
@@ -370,6 +379,26 @@ texture; a few degrees brings the intensities onto a comparable scale.">smooth
   </section>
 </main>
 </div>
+
+<dialog id="size-dialog">
+  <h2>Saved image size</h2>
+  <p class="muted">Applies to every PNG this page saves, and to a series render.
+    What is shown on screen stays at screen size, so the page keeps up.</p>
+  <div id="size-options"></div>
+  <div class="row">
+    <label for="size-width">custom width</label>
+    <input id="size-width" type="number" min="100" max="12000" step="10" value="2244">
+    <span class="muted">px</span>
+    <label for="size-height">height</label>
+    <input id="size-height" type="number" min="100" max="12000" step="10" value="1683">
+    <span class="muted">px, the 3D view only</span>
+  </div>
+  <p id="size-note" class="muted"></p>
+  <div class="row">
+    <button id="size-apply" class="primary">Apply</button>
+    <button id="size-close" class="small">Close</button>
+  </div>
+</dialog>
 
 <dialog id="colormap-dialog">
   <h2>Use your own colour scale</h2>

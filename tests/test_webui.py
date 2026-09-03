@@ -1027,3 +1027,102 @@ def test_the_full_analysis_comes_back_from_the_cache(base, analysed):
     assert status["result"]["full_n_atoms"] == analysed["result"]["n_atoms"]
     # No PTM run was needed: the whole cell was already matched.
     assert time.time() - started < 10
+
+
+def test_stopping_when_nothing_is_running_is_harmless(base, analysed):
+    outcome = _post_json(base, "/api/cancel", {})
+    assert outcome["stopped"] is False
+    # The result on screen is untouched by a stop that had nothing to stop.
+    assert _get_json(base, "/api/status")["result"]["n_atoms"] > 0
+
+
+def test_run_again_matches_from_scratch_rather_than_the_cache(base, analysed):
+    """Force must not take either of the shortcuts that skip PTM."""
+    before = _get_json(base, "/api/status")["generation"]
+    outcome = _post_json(
+        base,
+        "/api/analyse",
+        {"path": "crystal.xyz", "structures": ["hcp", "fcc"], "force": True},
+    )
+    assert outcome["accepted"]
+    assert not outcome.get("recoloured")
+    assert not outcome.get("subset")
+    status = _get_json(base, "/api/status")
+    while status["state"] == "running":
+        time.sleep(0.2)
+        status = _get_json(base, "/api/status")
+    assert status["state"] == "done", status.get("error")
+    assert status["result"]["n_atoms"] == analysed["result"]["n_atoms"]
+    assert status["generation"] > before
+
+
+def test_the_diagnostics_say_whether_an_analysis_can_be_stopped(base):
+    probe = _get_json(base, "/api/diagnostics")
+    assert "stoppable" in probe
+    assert isinstance(probe["stoppable"], bool)
+
+
+@pytest.mark.parametrize(
+    "path,expected",
+    [
+        ("/api/figure/legend?width=1800", 1800),
+        ("/api/figure/poles?poles=0001&width=2244", 2244),
+        ("/api/figure/ipfdensity?width=1063", 1063),
+        ("/api/figure/flatmap?view=z&pixel_size=1.0&width=1920", 1920),
+    ],
+)
+def test_a_saved_figure_can_be_asked_for_a_pixel_width(base, analysed, path, expected):
+    """The width asked for is the width delivered, within a rounding pixel."""
+    body = _get(base, path)[2]
+    width = _decode_png(body).shape[1]
+    assert abs(width - expected) <= 2, (path, width)
+
+
+def test_the_figure_keeps_its_proportions_when_it_is_enlarged(base, analysed):
+    small = _decode_png(_get(base, "/api/figure/poles?poles=0001&width=600")[2])
+    large = _decode_png(_get(base, "/api/figure/poles?poles=0001&width=2400")[2])
+    assert abs(large.shape[1] / large.shape[0] - small.shape[1] / small.shape[0]) < 0.02
+
+
+def test_an_unreasonable_width_is_capped_rather_than_obeyed(base, analysed):
+    body = _get(base, "/api/figure/legend?width=99999")[2]
+    assert _decode_png(body).shape[1] <= 12000
+
+
+def test_a_vector_figure_ignores_the_pixel_width(base, analysed):
+    plain = _get(base, "/api/figure/legend?format=svg")[2]
+    wide = _get(base, "/api/figure/legend?format=svg&width=4000")[2]
+    assert plain[:200] == wide[:200]
+
+
+def test_the_view_can_be_rendered_at_export_size(base, analysed, renderer):
+    body = _get(base, "/api/render?w=1920&h=1080")[2]
+    assert _decode_png(body).shape[:2] == (1080, 1920)
+    # A size no machine could hold is clamped, not attempted.
+    body = _get(base, "/api/render?w=99999&h=64")[2]
+    assert _decode_png(body).shape[1] <= 12000
+
+
+def test_a_post_that_ignores_its_body_does_not_corrupt_the_next_request(base, analysed):
+    """Whatever a handler does with the body, it must read it.
+
+    An unread body stays in the socket and is parsed as the beginning of the
+    next request on that keep-alive connection, which then fails with
+    "Unsupported method": a bug that only shows up on the request after.
+    """
+    import http.client
+
+    connection = http.client.HTTPConnection(base.split("//", 1)[1], timeout=60)
+    for path in ("/api/cancel", "/api/series/cancel"):
+        connection.request(
+            "POST", path,
+            body=json.dumps({"unused": True}),
+            headers={"Content-Type": "application/json"},
+        )
+        assert connection.getresponse().read() is not None
+        # The next request on the same connection must be understood.
+        connection.request("GET", "/api/status")
+        response = connection.getresponse()
+        assert response.status == 200, path
+        response.read()
+    connection.close()

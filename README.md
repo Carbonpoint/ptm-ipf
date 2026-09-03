@@ -598,8 +598,10 @@ slice the 3D view (the slice applies to the pole figures, IPF density and IPF ma
 *Analyse slice* runs PTM on just that slab), rotate the whole system about any axis, build
 a selection from several criteria (including "the basal-oriented grains" and "the grain
 containing this atom I clicked"), restrict the pole figures and IPF density to it, and
-export everything as PNG or SVG. Changing only the projection direction or a rotation
-re-uses the cached PTM result, so recolouring is immediate. A numbered file series is
+export everything as PNG or SVG at a chosen resolution (300 or 600 dpi at journal
+widths, HD, 4K, or your own). Changing only the projection direction or a rotation
+re-uses the cached PTM result, so recolouring is immediate. The analysis runs in its own
+process, so a long run can be stopped outright and started again from scratch. A numbered file series is
 stepped through with arrows, and the *Render series* card writes stills or a GIF/MP4 of
 any of the views for a range of frames. The *CLI command* button prints the `ptmipf`
 command line that reproduces the session, so exploration turns straight into a scriptable

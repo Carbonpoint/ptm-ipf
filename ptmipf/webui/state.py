@@ -33,6 +33,7 @@ import numpy as np
 from ..analysis import DEFAULT_OTHER_COLOR, IPFResult, quaternions_to_matrices
 from ..colorkey import IPFColorKey
 from ..frames import SampleFrame
+from ..io import temporary_path
 from ..structures import DEFAULT_STRUCTURES, get_structure
 from ..symmetry import get_laue_group
 from ..transform import (
@@ -42,6 +43,7 @@ from ..transform import (
     rotation_center,
     rotation_matrix,
 )
+from .worker import AnalysisWorker, Cancelled, WorkerUnavailable
 
 __all__ = ["AppState", "SelectionUnavailableError", "derive_result", "rotation_of", "run_ptm"]
 
@@ -340,6 +342,13 @@ class AppState:
         self.custom_colormap = None
         # The batch render of a trajectory series, if one has been started.
         self.series_job = None
+        # The child process the analysis runs in, so that it can be stopped;
+        # see ptmipf.webui.worker.  Started on the first analysis.
+        self.worker = AnalysisWorker()
+        self.worker_note = ""  # why it is not being used, if it is not
+        # Set while an analysis is being stopped, so that the run that is
+        # unwinding does not overwrite the state with its own outcome.
+        self.stopping = False
         # Throughput used to turn stage boundaries into a percentage, refined
         # from every run this process completes; see _stage_progress.
         self._rates = dict(_SEED_RATES)
@@ -396,16 +405,24 @@ class AppState:
         if analysis["columns"] and not analysis["columns"].get("quaternion"):
             raise ValueError("choose the column or columns that hold the quaternion")
 
+        force = bool(params.get("force"))
         with self.lock:
             if self.job["state"] == "running":
                 return {"accepted": False, "reason": "an analysis is already running"}
-            if self.base_result is not None and analysis == self.analysis_params:
+            if force:
+                # "Run again" means exactly that: matched again from the file,
+                # not rebuilt from anything this session has cached.  The
+                # current result stays on screen until the new one lands, so
+                # only the caches that would skip the run are dropped.
+                self.full_result, self.full_params = None, None
+            if not force and self.base_result is not None and analysis == self.analysis_params:
                 self._derive(colour)
                 return {"accepted": True, "recoloured": True}
             # A slab of a cell that has already been matched, or the whole
             # cell again after a slab, comes straight from the cached result.
             if (
-                self.full_result is not None
+                not force
+                and self.full_result is not None
                 and _without_slab(analysis) == _without_slab(self.full_params)
             ):
                 base = self.full_result
@@ -429,14 +446,26 @@ class AppState:
                 "n_atoms": 0,
                 "progress": 0.0,
             }
+            self.stopping = False
             self.ovito.submit(self._run_analysis, analysis, colour)
             return {"accepted": True, "recoloured": False}
 
     def _run_analysis(self, analysis: dict, colour: dict) -> None:
+        with self.lock:
+            if self.stopping:  # stopped while it was still queued
+                self._finish_stopped()
+                return
         try:
-            result = run_ptm(analysis, colour, progress=self._stage_started)
+            result = self._match(analysis, colour)
+        except Cancelled:
+            with self.lock:
+                self._finish_stopped()
+            return
         except Exception as exc:  # surfaced through /api/status, not a traceback
             with self.lock:
+                if self.stopping:
+                    self._finish_stopped()
+                    return
                 self.job = {
                     "state": "error", "stage": "", "error": str(exc),
                     "started": 0.0, "progress": 0.0,
@@ -449,6 +478,49 @@ class AppState:
             self.job = {
                 "state": "done", "stage": "", "error": "", "started": 0.0, "progress": 1.0
             }
+
+    def _match(self, analysis: dict, colour: dict) -> IPFResult:
+        """Run PTM, in the child process when there is one.
+
+        The child is what makes *Stop* work, but the interface must not depend
+        on it: if it cannot be started or dies of its own accord, the analysis
+        runs here instead and simply cannot be interrupted mid-stage.
+        """
+        with temporary_path(".pkl") as scratch:
+            try:
+                return self.worker.run(
+                    analysis, colour, Path(scratch), on_stage=self._stage_started
+                )
+            except WorkerUnavailable as exc:
+                with self.lock:
+                    self.worker_note = str(exc)
+        return run_ptm(analysis, colour, progress=self._stage_started)
+
+    def _finish_stopped(self) -> None:
+        """Leave the job stopped; the caller holds the lock."""
+        self.stopping = False
+        self.job = {
+            "state": "cancelled", "stage": "", "error": "", "started": 0.0, "progress": 0.0,
+        }
+
+    def cancel_analysis(self) -> dict:
+        """Stop the running analysis, killing the process it runs in.
+
+        Returns what happened, so the interface can say whether it stopped
+        something or there was nothing to stop.
+        """
+        with self.lock:
+            running = self.job.get("state") == "running"
+            if running:
+                self.stopping = True
+        killed = self.worker.stop()
+        with self.lock:
+            if running and not killed and self.job.get("state") == "running":
+                # It is between stages, or running in this process because the
+                # child is unavailable; either way it stops at the next
+                # checkpoint.  Say so now rather than leaving the page busy.
+                self._finish_stopped()
+            return {"stopped": running, "killed": killed, "state": self.job["state"]}
 
     def _install(self, base: IPFResult, analysis: dict, colour: dict, derive=True) -> None:
         """Make *base* the current PTM result and derive the shown one from it."""
@@ -735,6 +807,10 @@ class AppState:
                 self._diagnostics = self.ovito.submit(_probe_environment).result()
             probe = dict(self._diagnostics)
         probe["root"] = str(self.root)
+        # Whether an analysis can be stopped once it is inside OVITO, which
+        # depends on the child process being usable here.
+        probe["stoppable"] = bool(self.worker.available)
+        probe["stop_note"] = self.worker_note or self.worker.reason
         return probe
 
 

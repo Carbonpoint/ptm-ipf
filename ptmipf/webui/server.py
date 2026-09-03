@@ -243,10 +243,23 @@ def _figure_format(query: dict) -> str:
         raise ApiError(str(exc)) from None
 
 
+def _width_px(query: dict) -> int | None:
+    """How many pixels across a PNG is asked to be, if it was asked at all.
+
+    One parameter covers every preset the export dialog offers, because a
+    physical width at a stated resolution is a pixel count: 190 mm at 300 dpi
+    is 2244 px.  The figure keeps its proportions, so the height follows.
+    """
+    width = _number(query, "width", 0.0)
+    return int(width) if width >= 100 else None
+
+
 def legend_figure(state: AppState, result, query: dict):
     """The colour key.  Returns ``(body, format, filename, headers)``."""
     fmt = _figure_format(query)
-    body = figures.legend_png(result, query.get("structure", [None])[0], fmt=fmt)
+    body = figures.legend_png(
+        result, query.get("structure", [None])[0], fmt=fmt, width_px=_width_px(query)
+    )
     return body, fmt, f"ipf_key_{result.direction_label.lower()}.{fmt}", {}
 
 
@@ -266,6 +279,7 @@ def poles_figure(state: AppState, result, query: dict):
         fmt=fmt,
         up=query.get("up", [""])[0] or None,
         right=query.get("right", [""])[0] or None,
+        width_px=_width_px(query),
     )
     return body, fmt, f"pole_figures.{fmt}", {}
 
@@ -280,6 +294,7 @@ def density_figure(state: AppState, result, query: dict):
         smoothing=max(0.0, _number(query, "smoothing", 0.0)),
         cmap=colormap_of(state, query, "magma"),
         fmt=fmt,
+        width_px=_width_px(query),
     )
     return body, fmt, f"ipf_density.{fmt}", {}
 
@@ -315,6 +330,7 @@ def flat_map_figure(state: AppState, result, query: dict):
         structure=query.get("structure", [None])[0],
         title=query.get("title", [""])[0] or None,
         fmt=fmt,
+        width_px=_width_px(query),
     )
     headers = {
         "X-Grain-Count": str(info["n_grains"]),
@@ -361,9 +377,11 @@ def view_options(state: AppState, result, query: dict) -> dict:
         "azimuth": _number(query, "az", -125.0),
         "elevation": _number(query, "el", 20.0),
         "zoom": _number(query, "zoom", 1.0),
+        # Clamped: an export dialog can ask for 4K, a typo can ask for more
+        # than the machine has memory for.
         "size": (
-            int(_number(query, "w", 900)),
-            int(_number(query, "h", 700)),
+            int(min(max(_number(query, "w", 900), 32), figures.MAX_WIDTH_PX)),
+            int(min(max(_number(query, "h", 700), 32), figures.MAX_WIDTH_PX)),
         ),
         "hide_other": _flag(query, "hide_other"),
         "tripod": _flag(query, "tripod"),
@@ -886,12 +904,21 @@ class Handler(BaseHTTPRequestHandler):
             buffer.getvalue(), "application/zip", download=f"{job.out_dir.name}.zip"
         )
 
+    def _post_cancel(self):
+        """Stop the running analysis; harmless when there is nothing to stop."""
+        self._body()  # drained even though it is empty, see _post_series_cancel
+        self._json(self.state.cancel_analysis())
+
     def _post_series_render(self):
         from .series import start_series
 
         self._json(start_series(self.state, self._body()))
 
     def _post_series_cancel(self):
+        # The body has to be read even when it says nothing: what is left in
+        # the socket is parsed as the start of the next request on this
+        # connection, which then fails as an unsupported method.
+        self._body()
         self._json(self.state.cancel_series())
 
     # ------------------------------------------------------------------
@@ -909,6 +936,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/colormap/upload": self._post_colormap,
             "/api/series/render": self._post_series_render,
             "/api/series/cancel": self._post_series_cancel,
+            "/api/cancel": self._post_cancel,
         }
         if url.path in routes:
             self._dispatch(routes[url.path])

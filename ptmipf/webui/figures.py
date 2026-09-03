@@ -39,11 +39,32 @@ def normalise_format(fmt) -> str:
     return fmt
 
 
-def figure_bytes(fig, fmt: str = "png", dpi: int = 130, transparent: bool = False) -> bytes:
-    """Serialise and close *fig*; SVG keeps the plot editable in Inkscape."""
+#: Widest image worth producing, in pixels.  Beyond this a request is more
+#: likely a typo than a plan, and the memory cost is real.
+MAX_WIDTH_PX = 12000
+
+
+def figure_bytes(
+    fig,
+    fmt: str = "png",
+    dpi: int = 130,
+    transparent: bool = False,
+    width_px: int | None = None,
+) -> bytes:
+    """Serialise and close *fig*; SVG keeps the plot editable in Inkscape.
+
+    *width_px* asks for an image of that many pixels across.  It is met by
+    scaling the dots per inch rather than the figure, so the layout, the fonts
+    and the line weights keep their proportions: printed at the width it was
+    asked for, the figure has exactly the resolution that width implies.  A
+    vector format has no pixels, so it is ignored there.
+    """
     import matplotlib.pyplot as plt
 
     fmt = normalise_format(fmt)
+    if width_px and fmt == "png":
+        wanted = min(float(width_px), MAX_WIDTH_PX)
+        dpi = max(20.0, wanted / max(fig.get_figwidth(), 0.1))
     buffer = io.BytesIO()
     try:
         fig.savefig(buffer, format=fmt, dpi=dpi, transparent=transparent)
@@ -78,7 +99,11 @@ def _rotations(result, structure: str) -> np.ndarray:
 
 
 def legend_png(
-    result, structure: str | None = None, dpi: int = 130, fmt: str = "png"
+    result,
+    structure: str | None = None,
+    dpi: int = 130,
+    fmt: str = "png",
+    width_px: int | None = None,
 ) -> bytes:
     from ..legend import ipf_legend
 
@@ -87,7 +112,7 @@ def legend_png(
     fig = ipf_legend(
         laue, direction_label=result.direction_label, structure_label=name
     )
-    return figure_bytes(fig, fmt, dpi=dpi, transparent=True)
+    return figure_bytes(fig, fmt, dpi=dpi, transparent=True, width_px=width_px)
 
 
 def pole_figure_png(
@@ -103,6 +128,7 @@ def pole_figure_png(
     fmt: str = "png",
     up=None,
     right=None,
+    width_px: int | None = None,
 ) -> bytes:
     """Pole figures, by default with RD up and TD right.
 
@@ -140,7 +166,7 @@ def pole_figure_png(
         max_orientations=max_orientations,
         **axes,
     )
-    return figure_bytes(fig, fmt, dpi=dpi)
+    return figure_bytes(fig, fmt, dpi=dpi, width_px=width_px)
 
 
 def ipf_density_png(
@@ -152,6 +178,7 @@ def ipf_density_png(
     max_orientations: int = 200_000,
     dpi: int = 130,
     fmt: str = "png",
+    width_px: int | None = None,
 ) -> bytes:
     from ..polefigure import ipf_density
 
@@ -166,7 +193,7 @@ def ipf_density_png(
         cmap=cmap,
         max_orientations=max_orientations,
     )
-    return figure_bytes(fig, fmt, dpi=dpi)
+    return figure_bytes(fig, fmt, dpi=dpi, width_px=width_px)
 
 
 def flat_map_png(
@@ -181,6 +208,7 @@ def flat_map_png(
     slab_center: float | None = None,
     title: str | None = None,
     fmt: str = "png",
+    width_px: int | None = None,
 ) -> tuple[bytes, dict]:
     """A flat orientation map of a section, plus what it found.
 
@@ -208,4 +236,4 @@ def flat_map_png(
         "columns": flat.shape[1],
         "slab_center": round(float(flat.slab_center), 4),
     }
-    return figure_bytes(fig, fmt, dpi=dpi), info
+    return figure_bytes(fig, fmt, dpi=dpi, width_px=width_px), info
