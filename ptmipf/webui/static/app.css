@@ -443,3 +443,7 @@ label.inline .vec-boxes input[type="number"] { width: 3.6rem; }
 #series-progress::-moz-progress-bar { background: var(--accent); }
 .series-files { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.4rem; }
 #series-outdir { width: 12rem; }
+
+/* The busy overlays and vector boxes set their own display, which would win
+   over the browser's [hidden] rule and leave them showing all the time. */
+[hidden] { display: none !important; }
