@@ -390,25 +390,24 @@ def _boundary_mask(
 
 
 def _union_find_labels(shape, connected_pairs) -> np.ndarray:
-    """Label connected pixels, given the pairs that belong to the same grain."""
+    """Label connected pixels, given the pairs that belong to the same grain.
+
+    The pairs are an edge list over the pixel grid, so the labels are the
+    connected components of that graph.  SciPy does this in C; the same thing
+    written as a union-find in Python costs one call per pixel and dominated
+    the cost of every map (about seventy times this on a 682 by 682 map).
+    """
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+
     n = shape[0] * shape[1]
-    parent = np.arange(n)
-
-    def find(x):
-        root = x
-        while parent[root] != root:
-            root = parent[root]
-        while parent[x] != root:  # path compression
-            parent[x], x = root, parent[x]
-        return root
-
-    for a, b in connected_pairs:
-        ra, rb = find(int(a)), find(int(b))
-        if ra != rb:
-            parent[max(ra, rb)] = min(ra, rb)
-
-    roots = np.array([find(i) for i in range(n)])
-    _, labels = np.unique(roots, return_inverse=True)
+    pairs = np.asarray(connected_pairs, dtype=np.int64).reshape(-1, 2)
+    if len(pairs) == 0:
+        return np.arange(n).reshape(shape)
+    graph = coo_matrix(
+        (np.ones(len(pairs), dtype=bool), (pairs[:, 0], pairs[:, 1])), shape=(n, n)
+    )
+    _, labels = connected_components(graph, directed=False)
     return labels.reshape(shape)
 
 
@@ -418,8 +417,17 @@ def _grain_mean_rotations(labels, index, rotations, laue, sample=300):
 
     n = int(labels.max()) + 1
     means = np.tile(np.eye(3), (n, 1, 1))
+    # Group the pixels by label once, rather than scanning the whole image
+    # again for every grain: that scan is what made this quadratic.
+    flat_labels, flat_index = labels.ravel(), index.ravel()
+    order = np.argsort(flat_labels, kind="stable")
+    sorted_labels = flat_labels[order]
+    starts = np.searchsorted(sorted_labels, np.arange(n), side="left")
+    ends = np.searchsorted(sorted_labels, np.arange(n), side="right")
     for label in range(n):
-        atoms = np.unique(index[labels == label])
+        if ends[label] <= starts[label]:
+            continue
+        atoms = np.unique(flat_index[order[starts[label] : ends[label]]])
         if atoms.size == 0:
             continue
         picked = rotations[atoms]

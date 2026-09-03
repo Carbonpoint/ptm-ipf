@@ -12,6 +12,7 @@ to repaint the atoms along IPF-X, IPF-Y or IPF-Z without a re-export.
 from __future__ import annotations
 
 import contextlib
+import io
 import tempfile
 from pathlib import Path
 
@@ -88,14 +89,45 @@ def write_extxyz(result, path, keys=None) -> None:
     comment.append(f'ipf_direction="{" ".join(f"{c:.6f}" for c in result.direction)}"')
     comment.append(f'ipf_direction_label="{result.direction_label}"')
 
-    body = "{} {:.5f} {:.5f} {:.5f} {:d} {:.5f} {:.5f} {:.5f} {:.5f}" + " {:.8f}" * len(extra)
+    formats = ["%.5f", "%.5f", "%.5f", "%d", "%.5f", "%.5f", "%.5f", "%.5f"]
+    formats += ["%.8f"] * len(extra)
     with open(path, "w") as handle:
         handle.write(f"{n}\n")
         handle.write(" ".join(comment) + "\n")
-        for row in zip(*columns):
-            handle.write(
-                body.format(row[0], *row[1:4], int(row[4]), row[5], *row[6:]) + "\n"
+        # The numbers are formatted a block at a time by NumPy and the species
+        # names put in front of the finished lines: formatting per atom in
+        # Python is several times slower, and these files run to millions of
+        # lines.
+        _write_columns(handle, columns[1:], formats, labels=columns[0])
+
+
+def _write_columns(handle, columns, formats, labels=None) -> None:
+    """Write per-atom numeric columns, formatting them a block at a time.
+
+    ``savetxt`` formats a whole block in one call, which is far quicker than a
+    Python loop over atoms, but it holds the formatted text in memory, so the
+    blocks keep that bounded for a configuration of any size.  *labels* is an
+    optional column of strings written in front of each line, which is how the
+    extended XYZ species column is carried without turning the whole table
+    into strings.
+    """
+    fmt = " ".join(formats)
+    n = len(columns[0])
+    block = 200_000
+    for start in range(0, n, block):
+        stop = start + block
+        table = np.column_stack([np.asarray(c[start:stop]) for c in columns])
+        if labels is None:
+            np.savetxt(handle, table, fmt=fmt)
+            continue
+        text = io.StringIO()
+        np.savetxt(text, table, fmt=fmt)
+        handle.write(
+            "".join(
+                f"{name} {line}\n"
+                for name, line in zip(labels[start:stop], text.getvalue().splitlines())
             )
+        )
 
 
 def write_lammps_dump(result, path, keys=None) -> None:
@@ -131,18 +163,18 @@ def write_lammps_dump(result, path, keys=None) -> None:
             + "".join(f" {name}" for name in extra)
             + "\n"
         )
-        values = list(extra.values())
-        for i in range(result.n_atoms):
-            x, y, z = result.positions[i]
-            r, g, b = result.colors[i]
-            line = (
-                f"{i + 1} {int(result.particle_types[i])} {x:.5f} {y:.5f} {z:.5f} "
-                f"{int(result.structure_types[i])} {result.rmsd[i]:.5f} "
-                f"{r:.5f} {g:.5f} {b:.5f}"
-            )
-            for column in values:
-                line += f" {column[i]:.8f}"
-            handle.write(line + "\n")
+        columns = [
+            np.arange(1, result.n_atoms + 1),
+            result.particle_types,
+            *result.positions.T,
+            result.structure_types,
+            result.rmsd,
+            *result.colors.T,
+            *extra.values(),
+        ]
+        formats = ["%d", "%d", "%.5f", "%.5f", "%.5f", "%d", "%.5f", "%.5f", "%.5f", "%.5f"]
+        formats += ["%.8f"] * len(extra)
+        _write_columns(handle, columns, formats)
 
 
 def write_result(result, path, fmt: str | None = None, keys=None) -> str:

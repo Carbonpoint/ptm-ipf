@@ -50,6 +50,13 @@ def _matrices_to_quaternions(matrices: np.ndarray) -> np.ndarray:
     return q / np.linalg.norm(q, axis=1, keepdims=True)
 
 
+#: Neighbour pairs aligned at a time.  Each pair costs about half a kilobyte
+#: of temporaries, so a big configuration has tens of millions of them and
+#: doing the lot at once needs several gigabytes; a chunk this size needs about
+#: a hundred megabytes and runs no slower for staying in cache.
+PAIR_CHUNK = 200_000
+
+
 def _align_to_reference(rotations: np.ndarray, references: np.ndarray, laue: LaueGroup):
     """Replace each rotation by the symmetry equivalent closest to its reference.
 
@@ -178,7 +185,7 @@ def fill_boundary_orientations(
     neighbours, tree, targets = _neighbour_lists(
         result.positions, indexed, unindexed, radius, result.cell
     )
-    sizes = np.array([len(n) for n in neighbours])
+    sizes = np.fromiter((len(n) for n in neighbours), dtype=np.int64, count=len(neighbours))
     keep = sizes >= max(1, min_neighbours)
     if not keep.any():
         return replace(result, interpolated=np.zeros(result.n_atoms, dtype=bool))
@@ -193,9 +200,24 @@ def fill_boundary_orientations(
     _, nearest = tree.query(targets[keep], k=1)
     references = rotations[nearest]
 
-    aligned = _align_to_reference(rotations[flat], references[owners], laue)
-    accumulated = np.zeros((int(keep.sum()), 3, 3))
-    np.add.at(accumulated, owners, aligned)
+    # Summed in chunks straight into the per-atom accumulator: the aligned
+    # matrices for every pair at once are what used to make this the most
+    # memory-hungry step in the package by a wide margin.
+    n_filled = int(keep.sum())
+    accumulated = np.zeros((n_filled, 3, 3))
+    for start in range(0, len(flat), PAIR_CHUNK):
+        block = slice(start, start + PAIR_CHUNK)
+        block_owners = owners[block]
+        aligned = _align_to_reference(
+            rotations[flat[block]], references[block_owners], laue
+        )
+        for i in range(3):
+            for j in range(3):
+                # bincount rather than np.add.at, which is an unbuffered
+                # scatter and several times slower.
+                accumulated[:, i, j] += np.bincount(
+                    block_owners, weights=aligned[:, i, j], minlength=n_filled
+                )
     averaged = _nearest_rotation(accumulated / sizes[keep][:, None, None])
 
     orientations = result.orientations.copy()

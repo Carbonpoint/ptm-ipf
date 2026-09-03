@@ -71,10 +71,16 @@ class LaueGroup:
     #: True when directions should be labelled with four Miller-Bravais indices.
     hexagonal_indices: bool = False
     center: np.ndarray = field(init=False)
+    #: Every operator and its partner through the origin, built once.
+    _both_signs: np.ndarray = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         center = _unit(self.sector_vertices.mean(axis=0))[0]
         object.__setattr__(self, "center", center)
+        # Built once: reduce() applies every operator to +v and to -v, and
+        # rebuilding this per chunk was pure waste.
+        both = np.concatenate([self.operators, -self.operators], axis=0)
+        object.__setattr__(self, "_both_signs", both)
 
     @property
     def n_operators(self) -> int:
@@ -105,18 +111,21 @@ class LaueGroup:
         """
         v = np.atleast_2d(np.asarray(v, dtype=float))
         out = np.empty_like(v)
+        # Kept in double precision: symmetrically equivalent directions must
+        # reduce to the same direction exactly, not to within 1e-7, or two
+        # descriptions of one orientation get two different colours.
+        operators = self._both_signs
+        normals = self.sector_normals
+        indices = np.arange(chunk_size)
         for start in range(0, len(v), chunk_size):
             block = _unit(v[start : start + chunk_size])
-            # (n_ops, n, 3) for +v and -v: the Laue group adds the inversion.
-            equivalent = np.concatenate(
-                [np.einsum("oij,nj->oni", self.operators, block)] * 1
-                + [np.einsum("oij,nj->oni", -self.operators, block)],
-                axis=0,
-            )
+            # (2 n_ops, n, 3): the Laue group adds the inversion, so each
+            # operator is applied to +v and to -v.
+            equivalent = np.einsum("oij,nj->oni", operators, block, optimize=True)
             # Distance to the most violated sector boundary; >= 0 means inside.
-            margin = np.min(equivalent @ self.sector_normals.T, axis=-1)
+            margin = np.min(equivalent @ normals.T, axis=-1)
             best = np.argmax(margin, axis=0)
-            out[start : start + chunk_size] = equivalent[best, np.arange(len(block))]
+            out[start : start + chunk_size] = equivalent[best, indices[: len(block)]]
         return out
 
 
