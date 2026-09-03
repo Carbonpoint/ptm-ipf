@@ -87,3 +87,33 @@ def test_no_triad_means_no_extra_framing(result, tmp_path):
     info = {}
     render_result(result, tmp_path / "d.png", tripod=False, size=(300, 260), info=info)
     assert info["margin"] == 1.0
+
+
+def test_optional_overlay_properties_are_skipped_when_the_build_refuses_them():
+    """OVITO overlays use slots, so setting a property an older build does not
+    have raises rather than being ignored.  A cosmetic property must never
+    take the whole render down with it, which is what happened with
+    ``font_family``: it does not exist before OVITO 3.16.
+    """
+    from ptmipf.render import _set_if_possible
+
+    class Slotted:
+        __slots__ = ("size",)
+
+    target = Slotted()
+    assert _set_if_possible(target, "size", 0.2) is True
+    assert target.size == 0.2
+    assert _set_if_possible(target, "font_family", "DejaVu Sans") is False
+
+
+def test_the_triad_still_draws_without_the_optional_properties(monkeypatch):
+    """With every optional property refused, the axes are still set up."""
+    pytest.importorskip("ovito")
+    from ptmipf import render
+    from ptmipf.frames import SampleFrame
+
+    monkeypatch.setattr(render, "_set_if_possible", lambda *args: False)
+    tripod = render._tripod_overlay(SampleFrame(), ("rd", "td", "nd"))
+    assert tripod.axis1_label.lower() == "rd"
+    assert tripod.axis3_label.lower() == "nd"
+    assert tripod.axis1_enabled and tripod.axis3_enabled

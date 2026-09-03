@@ -146,6 +146,15 @@ def render_ipf(
         pipeline.remove_from_scene()
 
 
+def _set_if_possible(target, name: str, value) -> bool:
+    """Set an optional overlay property, ignoring one this OVITO build refuses."""
+    try:
+        setattr(target, name, value)
+        return True
+    except Exception:
+        return False
+
+
 def _tripod_overlay(
     frame,
     labels=("rd", "td", "nd"),
@@ -165,26 +174,31 @@ def _tripod_overlay(
     from ovito.vis import CoordinateTripodOverlay
 
     tripod = CoordinateTripodOverlay()
-    tripod.style = CoordinateTripodOverlay.Style.Solid
-    tripod.size = float(size)
-    tripod.line_width = 0.06
-    tripod.font_size = 0.42
-    tripod.font_family = "DejaVu Sans"
+    # Which of these an OVITO build accepts varies between versions, and a
+    # font that is not installed is refused outright, so the cosmetic ones are
+    # applied one at a time: a triad drawn with the defaults beats no view.
+    _set_if_possible(tripod, "style", CoordinateTripodOverlay.Style.Solid)
+    _set_if_possible(tripod, "size", float(size))
+    _set_if_possible(tripod, "line_width", 0.06)
+    _set_if_possible(tripod, "font_size", 0.42)
+    _set_if_possible(tripod, "font_family", "DejaVu Sans")
     # Enough inset that the axis labels are not clipped by the image edge.
-    tripod.offset_x = float(offset_x)
-    tripod.offset_y = float(offset_y)
-    tripod.axis4_enabled = False
+    _set_if_possible(tripod, "offset_x", float(offset_x))
+    _set_if_possible(tripod, "offset_y", float(offset_y))
+    _set_if_possible(tripod, "axis4_enabled", False)
     colors = ((0.85, 0.20, 0.20), (0.20, 0.60, 0.25), (0.20, 0.35, 0.85))
     labels = [label for label in labels if str(label).strip()][:3]
     names = list(names or [])
     for index in range(1, 4):
-        setattr(tripod, f"axis{index}_enabled", False)
+        _set_if_possible(tripod, f"axis{index}_enabled", False)
     for index, (spec, color) in enumerate(zip(labels, colors), start=1):
         text = names[index - 1] if index - 1 < len(names) and names[index - 1] else None
+        # The direction and the label are the point of the triad, so a failure
+        # here is a real one and is left to propagate.
         setattr(tripod, f"axis{index}_enabled", True)
         setattr(tripod, f"axis{index}_label", text or frame.label(spec))
         setattr(tripod, f"axis{index}_dir", tuple(float(c) for c in frame.direction(spec)))
-        setattr(tripod, f"axis{index}_color", color)
+        _set_if_possible(tripod, f"axis{index}_color", color)
     return tripod
 
 

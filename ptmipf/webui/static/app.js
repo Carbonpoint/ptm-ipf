@@ -789,7 +789,9 @@ async function refreshView() {
     $("view").classList.add("live");
     $("view-placeholder").hidden = true;
     $("download-view").href = "/api/render?" + viewQuery({ download: 1 });
-    showViewError(null);
+    // A decoration OVITO would not draw is a note, not a failure: the view is
+    // there, so say what is missing from it and leave it on screen.
+    showViewError(response.headers.get("X-Render-Warning") || null, true);
   } catch (error) {
     setStatus("the 3D view failed", "error");
     showViewError(error.message);
@@ -802,21 +804,28 @@ async function refreshView() {
 /* The 3D view is drawn by OVITO on the server and arrives as a PNG, so a
  * failure here is a server-side renderer problem and the browser has nothing
  * to show for it.  Saying so in the empty frame beats a broken image. */
-function showViewError(message) {
+function showViewError(message, warningOnly) {
   const box = $("view-error");
   if (!message) { box.hidden = true; return; }
-  // A stale image beside the explanation reads as if the view still worked.
-  $("view").classList.remove("live");
   box.replaceChildren();
   const title = document.createElement("strong");
-  title.textContent = "The 3D view could not be drawn.";
   const detail = document.createElement("p");
   detail.textContent = message;
   const hint = document.createElement("p");
   hint.className = "muted";
-  hint.textContent = "Run  ptmipf-ui --check  in the same environment to see what is " +
-    "missing. The plots, the IPF map and the exports do not need a " +
-    "renderer and still work.";
+  if (warningOnly) {
+    // The image is fine, only a decoration is missing, so it stays on screen.
+    title.textContent = "The view was drawn without one of its decorations.";
+    hint.textContent = "Everything else in the view is as it should be. " +
+      "Switching the triad off clears this message.";
+  } else {
+    // A stale image beside the explanation reads as if the view still worked.
+    $("view").classList.remove("live");
+    title.textContent = "The 3D view could not be drawn.";
+    hint.textContent = "Run  ptmipf-ui --check  in the same environment to see what is " +
+      "missing. The plots, the IPF map and the exports do not need a " +
+      "renderer and still work.";
+  }
   box.append(title, detail, hint);
   box.hidden = false;
   $("view-placeholder").hidden = true;

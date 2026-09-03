@@ -578,17 +578,22 @@ class Handler(BaseHTTPRequestHandler):
             result = self._result_or_409(query)
             options = self._view_options(query)
             transparent = _flag(query, "transparent")
+            warnings: list[str] = []
             with temporary_path(".png") as scratch:
                 state.ovito.submit(
                     rendering.render_scene,
                     result,
                     scratch,
                     transparent=transparent,
+                    warnings=warnings,
                     **options,
                 ).result()
                 body = Path(scratch).read_bytes()
         download = "ipf_view.png" if _flag(query, "download") else None
-        self._send(body, "image/png", download=download)
+        # A decoration that could not be drawn is a note beside the view, not
+        # a failed render; header values must stay on one line.
+        extra = {"X-Render-Warning": "; ".join(warnings).replace("\n", " ")} if warnings else None
+        self._send(body, "image/png", download=download, extra_headers=extra)
 
     def _send_figure(self, query, outcome):
         body, fmt, name, headers = outcome

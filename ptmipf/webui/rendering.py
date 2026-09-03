@@ -116,6 +116,7 @@ def render_scene(
     tripod_y: float = 0.05,
     label: str | None = None,
     engine: str = "auto",
+    warnings: list | None = None,
 ) -> str:
     """Render *result* to a PNG file and return the filename.
 
@@ -128,8 +129,11 @@ def render_scene(
     other directions (any spec the frame resolves), optionally captioned by
     *tripod_labels*; *tripod_size* and the offsets are fractions of the
     viewport.  *label* is stamped in the top left corner, which is how a frame
-    of a trajectory series says which frame it is.
+    of a trajectory series says which frame it is.  Anything that goes wrong
+    with an overlay is appended to *warnings* and the image is drawn without
+    it, because losing the view over a decoration helps nobody.
     """
+    warnings = [] if warnings is None else warnings
     from ovito.data import DataCollection, Particles, SimulationCell
     from ovito.pipeline import Pipeline, StaticSource
     from ovito.vis import Viewport
@@ -175,19 +179,35 @@ def render_scene(
         if tripod:
             from ..render import _tripod_overlay
 
-            viewport.overlays.append(
-                _tripod_overlay(
-                    result.frame,
-                    tuple(tripod_axes) if tripod_axes else ("rd", "td", "nd"),
-                    size=float(tripod_size),
-                    offset_x=float(tripod_x),
-                    offset_y=float(tripod_y),
-                    names=tuple(tripod_labels) if tripod_labels else None,
+            try:
+                viewport.overlays.append(
+                    _tripod_overlay(
+                        result.frame,
+                        tuple(tripod_axes) if tripod_axes else ("rd", "td", "nd"),
+                        size=float(tripod_size),
+                        offset_x=float(tripod_x),
+                        offset_y=float(tripod_y),
+                        names=tuple(tripod_labels) if tripod_labels else None,
+                    )
                 )
-            )
+            except Exception as exc:
+                # A triad this OVITO build will not draw must not cost the
+                # user the whole 3D view; the caller reports what went wrong.
+                warnings.append(f"the triad could not be drawn: {exc}")
         if label:
-            viewport.overlays.append(_text_overlay(str(label)))
-        _render_with(viewport, filename, size, transparent, engine)
+            try:
+                viewport.overlays.append(_text_overlay(str(label)))
+            except Exception as exc:
+                warnings.append(f"the caption could not be drawn: {exc}")
+        try:
+            _render_with(viewport, filename, size, transparent, engine)
+        except Exception as exc:
+            if not viewport.overlays:
+                raise
+            # An overlay that builds cleanly can still break the renderer.
+            warnings.append(f"drawn without the overlays: {exc}")
+            del viewport.overlays[:]
+            _render_with(viewport, filename, size, transparent, engine)
     finally:
         pipeline.remove_from_scene()
     return str(filename)
