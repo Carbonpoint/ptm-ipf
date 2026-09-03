@@ -129,6 +129,8 @@ def pole_figure_png(
     up=None,
     right=None,
     width_px: int | None = None,
+    vmin: float | None = None,
+    vmax: float | None = None,
 ) -> bytes:
     """Pole figures, by default with RD up and TD right.
 
@@ -164,6 +166,8 @@ def pole_figure_png(
         smoothing=smoothing,
         cmap=cmap,
         max_orientations=max_orientations,
+        vmin=vmin,
+        vmax=vmax,
         **axes,
     )
     return figure_bytes(fig, fmt, dpi=dpi, width_px=width_px)
@@ -179,6 +183,8 @@ def ipf_density_png(
     dpi: int = 130,
     fmt: str = "png",
     width_px: int | None = None,
+    vmin: float | None = None,
+    vmax: float | None = None,
 ) -> bytes:
     from ..polefigure import ipf_density
 
@@ -192,6 +198,8 @@ def ipf_density_png(
         smoothing=smoothing,
         cmap=cmap,
         max_orientations=max_orientations,
+        vmin=vmin,
+        vmax=vmax,
     )
     return figure_bytes(fig, fmt, dpi=dpi, width_px=width_px)
 

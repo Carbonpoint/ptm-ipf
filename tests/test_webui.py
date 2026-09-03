@@ -1140,7 +1140,9 @@ def test_a_figure_drawn_once_is_not_drawn_again(base, analysed):
     assert headers["X-Figure-Cache"] == "miss"
     assert other != first
     # Asking to download it, or busting the browser cache, is the same image.
-    _, headers, downloaded = _get(base, "/api/figure/poles?poles=0001&smoothing=3&download=1&gen=99")
+    _, headers, downloaded = _get(
+        base, "/api/figure/poles?poles=0001&smoothing=3&download=1&gen=99"
+    )
     assert headers["X-Figure-Cache"] == "hit"
     assert downloaded == first
     assert "attachment" in headers["Content-Disposition"]
@@ -1148,17 +1150,14 @@ def test_a_figure_drawn_once_is_not_drawn_again(base, analysed):
 
 def test_a_recolour_invalidates_the_cached_figures(base, analysed):
     _, _, before = _get(base, "/api/figure/ipfdensity")
-    outcome = _post_json(
-        base, "/api/analyse", {"path": "crystal.xyz", "structures": ["hcp", "fcc"], "direction": "x"}
-    )
+    settings = {"path": "crystal.xyz", "structures": ["hcp", "fcc"]}
+    outcome = _post_json(base, "/api/analyse", {**settings, "direction": "x"})
     assert outcome["accepted"]
     _, headers, after = _get(base, "/api/figure/ipfdensity")
     assert headers["X-Figure-Cache"] == "miss"
     assert after != before
     # Put the direction back for the tests that follow.
-    _post_json(
-        base, "/api/analyse", {"path": "crystal.xyz", "structures": ["hcp", "fcc"], "direction": "z"}
-    )
+    _post_json(base, "/api/analyse", {**settings, "direction": "z"})
 
 
 def test_the_cache_is_bounded_and_reports_itself(base, analysed):
@@ -1166,3 +1165,115 @@ def test_the_cache_is_bounded_and_reports_itself(base, analysed):
     assert "figure_cache" in probe
     assert probe["figure_cache"]["entries"] >= 0
     assert probe["figure_cache"]["bytes"] <= 192 << 20
+
+
+# ---------------------------------------------------------------------------
+# several slices at once, the view frame, and a fixed intensity scale
+# ---------------------------------------------------------------------------
+def test_two_slices_are_combined_for_the_figures(base, analysed, renderer):
+    """Repeating the slice parameters adds a slice; the mode says how they join."""
+    one = "slice_axis=z&slice_distance=8&slice_width=4"
+    two = one + "&slice_axis=z&slice_distance=25&slice_width=4"
+    counts = {}
+    for name, query in (("one", one), ("union", two), ("both", two + "&slice_mode=all")):
+        status, _, body = _get(base, f"/api/render?w=200&h=160&{query}")
+        assert status == 200, name
+        counts[name] = _decode_png(body)
+    # Two disjoint slabs show more atoms than one; requiring both shows none of
+    # them, since a slab at z=8 and a slab at z=25 do not overlap.
+    assert not np.allclose(counts["one"], counts["union"])
+    assert not np.allclose(counts["union"], counts["both"])
+    # The pole figures take the same set of slices.
+    status, headers, body = _get(base, f"/api/figure/poles?poles=0001&{two}")
+    assert status == 200 and headers["Content-Type"] == "image/png"
+    with pytest.raises(urllib.error.HTTPError) as excinfo:
+        _get(base, f"/api/figure/poles?poles=0001&{two}&slice_mode=all")
+    assert excinfo.value.code == 400
+
+
+def test_one_width_covers_every_slice(base, analysed):
+    """A single width given for two slices applies to both."""
+    query = "slice_axis=z&slice_distance=8&slice_distance=25&slice_width=4"
+    status, _, body = _get(base, f"/api/figure/ipfdensity?{query}")
+    assert status == 200
+    assert _decode_png(body).ndim == 3
+
+
+def test_the_view_reports_where_the_camera_looked(base, analysed, renderer):
+    _, headers, _ = _get(base, "/api/render?w=200&h=160")
+    center = [float(c) for c in headers["X-View-Center"].split(",")]
+    radius = float(headers["X-View-Radius"])
+    assert len(center) == 3 and radius > 0
+    # Pinning them reproduces the same camera, which is what a series does so
+    # that the configuration does not jump between frames.
+    pinned = (
+        f"/api/render?w=200&h=160&origin={headers['X-View-Center']}"
+        f"&scene_radius={headers['X-View-Radius']}"
+    )
+    _, again, _ = _get(base, pinned)
+    assert [float(c) for c in again["X-View-Center"].split(",")] == pytest.approx(center)
+    assert float(again["X-View-Radius"]) == pytest.approx(radius)
+
+
+def test_panning_moves_the_configuration_in_the_window(base, analysed, renderer):
+    plain = _decode_png(_get(base, "/api/render?w=240&h=200")[2])
+    panned = _decode_png(_get(base, "/api/render?w=240&h=200&pan_x=0.3&pan_y=-0.2")[2])
+    assert plain.shape == panned.shape
+    assert not np.allclose(plain, panned)
+    # The pan moves the camera's centre, and the render says where it ended up.
+    _, headers, _ = _get(base, "/api/render?w=240&h=200&pan_x=0.3")
+    moved = [float(c) for c in headers["X-View-Center"].split(",")]
+    _, headers, _ = _get(base, "/api/render?w=240&h=200")
+    still = [float(c) for c in headers["X-View-Center"].split(",")]
+    assert not np.allclose(moved, still)
+
+
+def test_an_origin_that_is_not_a_vector_is_a_message(base, analysed):
+    with pytest.raises(urllib.error.HTTPError) as excinfo:
+        _get(base, "/api/render?w=100&h=80&origin=middle")
+    assert excinfo.value.code == 400
+    assert "three numbers" in json.loads(excinfo.value.read())["error"]
+
+
+def test_the_pole_figure_intensity_range_can_be_fixed(base, analysed):
+    auto = _decode_png(_get(base, "/api/figure/poles?poles=0001")[2])
+    fixed = _decode_png(_get(base, "/api/figure/poles?poles=0001&vmin=0&vmax=20")[2])
+    assert auto.shape == fixed.shape
+    assert not np.allclose(auto, fixed)
+    # Two figures on the same fixed range are directly comparable, so the same
+    # settings must give the same image whatever the data would have scaled to.
+    again = _decode_png(_get(base, "/api/figure/poles?poles=0001&vmin=0&vmax=20")[2])
+    assert np.allclose(fixed, again)
+    density = _get(base, "/api/figure/ipfdensity?vmin=0&vmax=15")
+    assert density[0] == 200
+    with pytest.raises(urllib.error.HTTPError) as excinfo:
+        _get(base, "/api/figure/poles?poles=0001&vmax=lots")
+    assert excinfo.value.code == 400
+
+
+def test_the_intensity_range_round_trips_through_the_command(base, analysed):
+    outcome = _post_json(
+        base,
+        "/api/command",
+        {"poles": ["0001"], "pole_range": {"min": 0, "max": 20},
+         "density_range": {"min": None, "max": 15}},
+    )
+    assert "--pole-figure-range 0:20" in outcome["command"]
+    assert "--ipf-density-range :15" in outcome["command"]
+    parsed = _post_json(base, "/api/command/parse", {"command": outcome["command"]})
+    assert parsed["ui"]["pole_range"] == {"min": 0.0, "max": 20.0}
+    assert parsed["ui"]["density_range"] == {"min": None, "max": 15.0}
+
+
+def test_the_command_says_what_it_cannot_express(base, analysed):
+    outcome = _post_json(
+        base, "/api/command", {"poles": ["0001"], "extra_slices": 2, "moved_view": True}
+    )
+    assert "several slices" in outcome["command"]
+    assert "the view has been moved" in outcome["command"]
+    # The note is a comment, so the command still runs as written.
+    assert all(
+        line.startswith("#") or "--" in line or line.strip().startswith("ptmipf")
+        or line.strip().endswith("\\") or not line.strip()
+        for line in outcome["command"].splitlines()
+    )

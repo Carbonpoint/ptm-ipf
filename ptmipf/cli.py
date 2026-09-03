@@ -366,6 +366,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     group.add_argument("--ipf-density", help="write the IPF orientation density plot to this PNG")
     group.add_argument(
+        "--pole-figure-range",
+        metavar="MIN:MAX",
+        help="fix the intensity scale of the pole figures, in MRD, e.g. 0:20.  "
+        "Without it each figure is scaled to its own peak, which is right for "
+        "one figure and wrong for a set meant to be compared",
+    )
+    group.add_argument(
+        "--ipf-density-range",
+        metavar="MIN:MAX",
+        help="fix the intensity scale of the IPF density, in MRD, as "
+        "--pole-figure-range does for the pole figures",
+    )
+    group.add_argument(
         "--pole-figure-cmap",
         metavar="NAME|FILE",
         default="viridis",
@@ -712,6 +725,32 @@ def _tripod_axes(text: str):
     return specs, names
 
 
+def _range_of(text, option: str) -> dict:
+    """``MIN:MAX`` as the vmin and vmax a density plot takes.
+
+    Either end may be left out, so ``:20`` fixes the top of the scale and
+    leaves the bottom to the data.
+    """
+    if not text:
+        return {}
+    parts = str(text).replace(",", ":").split(":")
+    if len(parts) != 2:
+        raise SystemExit(f"{option} looks like MIN:MAX, e.g. 0:20, got {text!r}")
+    values = []
+    for part in parts:
+        part = part.strip()
+        if not part:
+            values.append(None)
+            continue
+        try:
+            values.append(float(part))
+        except ValueError:
+            raise SystemExit(f"{option} needs numbers, got {text!r}") from None
+    if values[0] is not None and values[1] is not None and values[1] <= values[0]:
+        raise SystemExit(f"{option} needs MAX above MIN, got {text!r}")
+    return {"vmin": values[0], "vmax": values[1]}
+
+
 def _color(text: str):
     parts = [float(t) for t in text.replace(",", " ").split()]
     if len(parts) != 3:
@@ -874,6 +913,7 @@ def main(argv=None) -> int:
                 mode=args.pole_figure_mode,
                 smoothing=args.pole_figure_smoothing,
                 cmap=args.pole_figure_cmap,
+                **_range_of(args.pole_figure_range, "--pole-figure-range"),
                 max_orientations=args.max_orientations,
                 filename=filename,
                 dpi=args.dpi,
@@ -891,6 +931,7 @@ def main(argv=None) -> int:
                 sample_frame=frame,
                 smoothing=args.ipf_density_smoothing,
                 cmap=args.ipf_density_cmap,
+                **_range_of(args.ipf_density_range, "--ipf-density-range"),
                 max_orientations=args.max_orientations,
                 filename=args.ipf_density,
                 dpi=args.dpi,

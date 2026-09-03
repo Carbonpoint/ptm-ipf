@@ -50,6 +50,37 @@ def _scene_frame(result):
     return center, max(radius, 1.0)
 
 
+def camera_frame(
+    result,
+    azimuth: float,
+    elevation: float,
+    zoom: float = 1.0,
+    pan=(0.0, 0.0),
+    origin=None,
+    scene_radius: float | None = None,
+):
+    """Everything that places the camera, shared by the render and by picking.
+
+    *origin* is the point the camera looks at, the middle of the atoms unless
+    it is given; *pan* moves that point across the view in units of the
+    visible height, so a pan means the same amount at any zoom; and
+    *scene_radius* fixes the size the view is scaled to, which is what keeps a
+    series of frames from jumping about as the configuration changes shape.
+
+    Returns ``(center, radius, direction, right, up, fov)``.
+    """
+    auto_center, auto_radius = _scene_frame(result)
+    center = auto_center if origin is None else np.asarray(origin, dtype=float).reshape(3)
+    radius = auto_radius if scene_radius is None else max(float(scene_radius), 1e-3)
+    direction, right, up = camera_basis(azimuth, elevation)
+    fov = _fov(radius, zoom)
+    pan_x, pan_y = (float(pan[0]), float(pan[1])) if pan is not None else (0.0, 0.0)
+    if pan_x or pan_y:
+        # The visible height is 2 * fov in world units.
+        center = center + right * (pan_x * 2.0 * fov) + up * (pan_y * 2.0 * fov)
+    return center, radius, direction, right, up, fov
+
+
 def default_radius(result) -> float:
     """Particle radius from the number density, so atoms just about touch."""
     span = result.positions.max(axis=0) - result.positions.min(axis=0)
@@ -64,6 +95,45 @@ def slice_bounds(result, normal) -> tuple[float, float]:
     return float(projected.min()), float(projected.max())
 
 
+def slice_mask(result, normal, distance: float | None, width: float = 0.0) -> np.ndarray:
+    """The atoms one slice keeps.
+
+    A width of zero keeps everything up to the plane, which is the cell cut
+    open; a width keeps a slab of that thickness centred on the plane, which
+    is the atomistic equivalent of an EBSD section.
+    """
+    normal = np.asarray(normal, dtype=float)
+    projected = result.positions @ normal
+    if distance is None:
+        distance = float(result.positions.mean(axis=0) @ normal)
+    if width > 0:
+        return np.abs(projected - distance) <= width / 2.0
+    return projected <= distance
+
+
+def slices_mask(result, slices, mode: str = "any") -> np.ndarray:
+    """The atoms a set of slices keeps, combined.
+
+    ``any`` is the union, which is how several sections of one configuration
+    are shown together; ``all`` is the intersection, which is how crossed
+    slabs cut out a bar or a block.
+    """
+    slices = list(slices or [])
+    if not slices:
+        return np.ones(result.n_atoms, dtype=bool)
+    masks = [
+        slice_mask(result, s["normal"], s.get("distance"), s.get("width", 0.0))
+        for s in slices
+    ]
+    combined = masks[0].copy()
+    for mask in masks[1:]:
+        if mode == "all":
+            combined &= mask
+        else:
+            combined |= mask
+    return combined
+
+
 def visible_mask(
     result,
     hide_other: bool = False,
@@ -72,22 +142,22 @@ def visible_mask(
     slice_width: float = 0.0,
     selection: np.ndarray | None = None,
     selection_mode: str = "highlight",
+    slices=None,
+    slice_mode: str = "any",
 ) -> np.ndarray:
-    """Which atoms appear in the render; picking must use the same mask."""
+    """Which atoms appear in the render; picking must use the same mask.
+
+    A single slice can be given as *slice_normal* and its distance and width,
+    or several as *slices*, each a dict of ``normal``, ``distance`` and
+    ``width``, combined by *slice_mode*.
+    """
     visible = np.ones(result.n_atoms, dtype=bool)
     if hide_other:
         visible &= result.structure_types != 0
-    if slice_normal is not None:
-        normal = np.asarray(slice_normal, dtype=float)
-        projected = result.positions @ normal
-        if slice_distance is None:
-            slice_distance = float(result.positions.mean(axis=0) @ normal)
-        if slice_width > 0:
-            # A slab of the given thickness centred on the plane, which is the
-            # atomistic equivalent of an EBSD section.
-            visible &= np.abs(projected - slice_distance) <= slice_width / 2.0
-        else:
-            visible &= projected <= slice_distance
+    if slices:
+        visible &= slices_mask(result, slices, slice_mode)
+    elif slice_normal is not None:
+        visible &= slice_mask(result, slice_normal, slice_distance, slice_width)
     if selection is not None and selection_mode == "only":
         visible &= selection
     return visible
@@ -104,8 +174,13 @@ def render_scene(
     slice_normal=None,
     slice_distance: float | None = None,
     slice_width: float = 0.0,
+    slices=None,
+    slice_mode: str = "any",
     selection: np.ndarray | None = None,
     selection_mode: str = "highlight",
+    pan=(0.0, 0.0),
+    origin=None,
+    scene_radius: float | None = None,
     transparent: bool = False,
     radius: float | None = None,
     tripod: bool = False,
@@ -144,6 +219,8 @@ def render_scene(
         slice_normal=slice_normal,
         slice_distance=slice_distance,
         slice_width=slice_width,
+        slices=slices,
+        slice_mode=slice_mode,
         selection=selection,
         selection_mode=selection_mode,
     )
@@ -164,18 +241,19 @@ def render_scene(
         cell[...] = np.asarray(result.cell)
         data.objects.append(cell)
 
-    center, scene_radius = _scene_frame(result)
-    direction, _, up = camera_basis(azimuth, elevation)
+    center, radius, direction, _, up, fov = camera_frame(
+        result, azimuth, elevation, zoom, pan=pan, origin=origin, scene_radius=scene_radius
+    )
     pipeline = Pipeline(source=StaticSource(data=data))
     pipeline.add_to_scene()
     try:
         viewport = Viewport(type=Viewport.Type.Ortho)
         viewport.camera_dir = tuple(direction)
         viewport.camera_up = tuple(up)
-        viewport.camera_pos = tuple(center - direction * scene_radius * 3.0)
+        viewport.camera_pos = tuple(center - direction * radius * 3.0)
         # For an orthographic viewport, fov is half the vertical extent in
         # world units (verified against rendered pixel positions).
-        viewport.fov = _fov(scene_radius, zoom)
+        viewport.fov = fov
         if tripod:
             from ..render import _tripod_overlay
 
@@ -278,6 +356,9 @@ def pick_atom(
     zoom: float,
     size,
     tolerance_px: float = 12.0,
+    pan=(0.0, 0.0),
+    origin=None,
+    scene_radius: float | None = None,
     **mask_kwargs,
 ) -> int | None:
     """Index of the atom under pixel ``(x, y)`` of the rendered image.
@@ -293,6 +374,8 @@ def pick_atom(
         "slice_normal",
         "slice_distance",
         "slice_width",
+        "slices",
+        "slice_mode",
         "selection",
         "selection_mode",
     )
@@ -302,13 +385,13 @@ def pick_atom(
     indices = np.flatnonzero(visible)
     positions = result.positions[indices]
 
-    center, scene_radius = _scene_frame(result)
-    direction, right, up = camera_basis(azimuth, elevation)
-    fov = _fov(scene_radius, zoom)
+    center, radius, direction, right, up, fov = camera_frame(
+        result, azimuth, elevation, zoom, pan=pan, origin=origin, scene_radius=scene_radius
+    )
     width, height = size
     scale = (height / 2.0) / fov  # pixels per world unit
 
-    camera_pos = center - direction * scene_radius * 3.0
+    camera_pos = center - direction * radius * 3.0
     q = positions - camera_pos
     px = width / 2.0 + (q @ right) * scale
     py = height / 2.0 - (q @ up) * scale

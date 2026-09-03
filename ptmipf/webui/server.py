@@ -172,33 +172,73 @@ def _list(query: dict, name: str, sep: str = ";", keep_empty: bool = False) -> l
     return [item for item in items if item]
 
 
-def slice_of(result, query: dict) -> dict | None:
-    """The slice a request asks for, resolved against *result*.
+def _one_slice(result, axis: str, distance, width, fraction) -> dict:
+    """Resolve one slice against *result*."""
+    normal = result.frame.direction(axis)
+    if distance in (None, ""):
+        low, high = rendering.slice_bounds(result, normal)
+        try:
+            fraction = 1.0 if fraction in (None, "") else float(fraction)
+        except ValueError:
+            fraction = 1.0
+        distance = low + float(np.clip(fraction, 0.0, 1.0)) * (high - low)
+    else:
+        try:
+            distance = float(distance)
+        except ValueError:
+            raise ApiError(f"a slice distance must be a number, got {distance!r}") from None
+    try:
+        width = 0.0 if width in (None, "") else max(0.0, float(width))
+    except ValueError:
+        raise ApiError(f"a slice width must be a number, got {width!r}") from None
+    return {"axis": axis, "normal": normal, "distance": float(distance), "width": width}
+
+
+def slices_of(result, query: dict) -> list[dict]:
+    """Every slice a request asks for, resolved against *result*.
 
     ``slice_axis`` names the normal (any direction spec).  ``slice_distance``
     places the plane in angstroms along it; without one ``slice_frac`` places
     it as a fraction of the atoms' extent, which is what the slider sends.
     ``slice_width`` is the slab thickness, zero meaning everything up to the
-    plane.  Every image endpoint reads the same three parameters, so the
-    3D view, the IPF map and the pole figures can all show one slice.
+    plane.
+
+    The three may be repeated, in which case they are read together in order
+    and each triple is one slice: ``slice_axis=z&slice_distance=10&
+    slice_axis=x&slice_distance=40`` is two.  ``slice_mode`` says how they
+    combine, ``any`` for the union (several sections at once) or ``all`` for
+    the intersection (crossed slabs cutting out a block).  Every image
+    endpoint reads the same parameters, so the 3D view, the IPF map, the pole
+    figures and the density all show the same atoms.
     """
-    axis = query.get("slice_axis", [""])[0]
-    if not axis:
-        return None
-    normal = result.frame.direction(axis)
-    distance = query.get("slice_distance", [None])[0]
-    if distance in (None, ""):
-        low, high = rendering.slice_bounds(result, normal)
-        fraction = np.clip(_number(query, "slice_frac", 1.0), 0.0, 1.0)
-        distance = low + fraction * (high - low)
-    else:
-        distance = _number(query, "slice_distance", 0.0)
-    return {
-        "axis": axis,
-        "normal": normal,
-        "distance": float(distance),
-        "width": max(0.0, _number(query, "slice_width", 0.0)),
-    }
+    axes = [a for a in query.get("slice_axis", []) if str(a).strip()]
+    if not axes:
+        return []
+    distances = query.get("slice_distance", [])
+    widths = query.get("slice_width", [])
+    fractions = query.get("slice_frac", [])
+
+    def at(values, index):
+        if index < len(values):
+            return values[index]
+        # One width or distance given for several slices applies to them all,
+        # which is what the page sends when only the extra slices differ.
+        return values[0] if len(values) == 1 else None
+
+    return [
+        _one_slice(result, str(axis).strip(), at(distances, i), at(widths, i), at(fractions, i))
+        for i, axis in enumerate(axes)
+    ]
+
+
+def slice_mode_of(query: dict) -> str:
+    return "all" if query.get("slice_mode", ["any"])[0] == "all" else "any"
+
+
+def slice_of(result, query: dict) -> dict | None:
+    """The first slice a request asks for, or None; see :func:`slices_of`."""
+    found = slices_of(result, query)
+    return found[0] if found else None
 
 
 def figure_result(state: AppState, query: dict, result=None, slice_atoms: bool = True):
@@ -216,14 +256,9 @@ def figure_result(state: AppState, query: dict, result=None, slice_atoms: bool =
         if result is None:
             raise ApiError("no analysis result yet", HTTPStatus.CONFLICT)
     keep = None
-    section = slice_of(result, query) if slice_atoms else None
-    if section is not None:
-        keep = rendering.visible_mask(
-            result,
-            slice_normal=section["normal"],
-            slice_distance=section["distance"],
-            slice_width=section["width"],
-        )
+    sections = slices_of(result, query) if slice_atoms else []
+    if sections:
+        keep = rendering.slices_mask(result, sections, slice_mode_of(query))
     if _flag(query, "selection"):
         mask = state.selection_mask
         if mask is None:
@@ -259,6 +294,37 @@ def _figure_key(query: dict):
     )
 
 
+def _vector(text: str, name: str) -> np.ndarray:
+    """Three numbers, comma or space separated, as a vector."""
+    parts = [p for p in str(text).replace(",", " ").split() if p]
+    try:
+        values = [float(p) for p in parts]
+    except ValueError:
+        values = []
+    if len(values) != 3:
+        raise ApiError(f"{name} needs three numbers, got {text!r}")
+    return np.asarray(values, dtype=float)
+
+
+def _scale(query: dict) -> tuple[float | None, float | None]:
+    """The fixed intensity range of a density plot, if one was asked for.
+
+    Empty means automatic, which scales every figure to its own peak.  A range
+    is what makes two figures comparable, and it is given in MRD, the unit the
+    colour bar is labelled with.
+    """
+    def one(name):
+        raw = query.get(name, [""])[0]
+        if raw in (None, ""):
+            return None
+        try:
+            return float(raw)
+        except ValueError:
+            raise ApiError(f"{name} must be a number, got {raw!r}") from None
+
+    return one("vmin"), one("vmax")
+
+
 def _width_px(query: dict) -> int | None:
     """How many pixels across a PNG is asked to be, if it was asked at all.
 
@@ -281,6 +347,7 @@ def legend_figure(state: AppState, result, query: dict):
 
 def poles_figure(state: AppState, result, query: dict):
     fmt = _figure_format(query)
+    vmin, vmax = _scale(query)
     poles = [p for p in query.get("poles", ["0001"])[0].split(",") if p.strip()]
     if not poles:
         raise ApiError("at least one pole family is required")
@@ -296,12 +363,15 @@ def poles_figure(state: AppState, result, query: dict):
         up=query.get("up", [""])[0] or None,
         right=query.get("right", [""])[0] or None,
         width_px=_width_px(query),
+        vmin=vmin,
+        vmax=vmax,
     )
     return body, fmt, f"pole_figures.{fmt}", {}
 
 
 def density_figure(state: AppState, result, query: dict):
     fmt = _figure_format(query)
+    vmin, vmax = _scale(query)
     direction = query.get("direction", [""])[0] or state.colour_params.get("direction", "z")
     body = figures.ipf_density_png(
         result,
@@ -311,6 +381,8 @@ def density_figure(state: AppState, result, query: dict):
         cmap=colormap_of(state, query, "magma"),
         fmt=fmt,
         width_px=_width_px(query),
+        vmin=vmin,
+        vmax=vmax,
     )
     return body, fmt, f"ipf_density.{fmt}", {}
 
@@ -327,14 +399,22 @@ def flat_map_figure(state: AppState, result, query: dict):
     view = query.get("view", ["z"])[0] or "z"
     slab_width = _number(query, "slab_width", 10.0)
     center = None
-    section = slice_of(result, query)
-    if section is not None:
+    sections = slices_of(result, query)
+    if sections:
+        # A map is a section seen face on, so the first slice is the section
+        # itself; any others are a filter on the atoms that go into it.
+        section = sections[0]
         view = section["axis"]
         if section["width"] > 0:
             slab_width = section["width"]
             center = section["distance"]
         else:
             center = section["distance"] - slab_width / 2.0
+        if len(sections) > 1:
+            keep = rendering.slices_mask(result, sections[1:], slice_mode_of(query))
+            if not keep.any():
+                raise ApiError("no atoms are left after slicing")
+            result = subset_result(result, keep)
     body, info = figures.flat_map_png(
         result,
         view=view,
@@ -415,11 +495,21 @@ def view_options(state: AppState, result, query: dict) -> dict:
     label = query.get("label", [""])[0]
     if label:
         options["label"] = label
-    section = slice_of(result, query)
-    if section is not None:
-        options["slice_normal"] = section["normal"]
-        options["slice_distance"] = section["distance"]
-        options["slice_width"] = section["width"]
+    sections = slices_of(result, query)
+    if sections:
+        options["slices"] = sections
+        options["slice_mode"] = slice_mode_of(query)
+    # Where the view sits over the configuration: a pan across the view plane
+    # in units of the visible height, the point it is centred on, and the size
+    # it is scaled to.  The last two are what a series of frames pins so that
+    # the configuration does not jump about from frame to frame.
+    options["pan"] = (_number(query, "pan_x", 0.0), _number(query, "pan_y", 0.0))
+    origin = query.get("origin", [""])[0]
+    if origin:
+        options["origin"] = _vector(origin, "origin")
+    radius = _number(query, "scene_radius", 0.0)
+    if radius > 0:
+        options["scene_radius"] = radius
     mode = query.get("highlight", ["highlight"])[0]
     options["selection_mode"] = mode
     options["selection"] = _selection_active(state, mode)
@@ -613,6 +703,15 @@ class Handler(BaseHTTPRequestHandler):
             options = self._view_options(query)
             transparent = _flag(query, "transparent")
             warnings: list[str] = []
+            frame = rendering.camera_frame(
+                result,
+                options["azimuth"],
+                options["elevation"],
+                options["zoom"],
+                pan=options.get("pan", (0.0, 0.0)),
+                origin=options.get("origin"),
+                scene_radius=options.get("scene_radius"),
+            )
             with temporary_path(".png") as scratch:
                 state.ovito.submit(
                     rendering.render_scene,
@@ -626,7 +725,15 @@ class Handler(BaseHTTPRequestHandler):
         download = "ipf_view.png" if _flag(query, "download") else None
         # A decoration that could not be drawn is a note beside the view, not
         # a failed render; header values must stay on one line.
-        extra = {"X-Render-Warning": "; ".join(warnings).replace("\n", " ")} if warnings else None
+        center, radius = frame[0], frame[1]
+        extra = {
+            # What the camera actually used, so that the page can pin it and
+            # every frame of a series is seen from the same place.
+            "X-View-Center": ",".join(f"{c:.4f}" for c in center),
+            "X-View-Radius": f"{radius:.4f}",
+        }
+        if warnings:
+            extra["X-Render-Warning"] = "; ".join(warnings).replace("\n", " ")
         self._send(body, "image/png", download=download, extra_headers=extra)
 
     def _send_figure(self, query, outcome, cached=False):
@@ -1136,7 +1243,28 @@ def build_command(state: AppState, ui: dict) -> tuple[list[str], str]:
                 parts.append(f"--slice-width {float(ui['slice_width']):g}")
         if ui.get("view"):
             parts.append(f"--view {shlex.quote(str(ui['view']))}")
-        note = ""
+        pole_range = ui.get("pole_range") or {}
+        if pole_range.get("min") is not None or pole_range.get("max") is not None:
+            low = "" if pole_range.get("min") is None else f"{float(pole_range['min']):g}"
+            high = "" if pole_range.get("max") is None else f"{float(pole_range['max']):g}"
+            parts.append(f"--pole-figure-range {low}:{high}")
+        density_range = ui.get("density_range") or {}
+        if density_range.get("min") is not None or density_range.get("max") is not None:
+            low = "" if density_range.get("min") is None else f"{float(density_range['min']):g}"
+            high = "" if density_range.get("max") is None else f"{float(density_range['max']):g}"
+            parts.append(f"--ipf-density-range {low}:{high}")
+        notes = []
+        if ui.get("extra_slices"):
+            notes.append(
+                "\n# note: the figures are drawn from several slices at once, which"
+                "\n# the command line cannot express; it carries the first slice only."
+            )
+        if ui.get("moved_view"):
+            notes.append(
+                "\n# note: the view has been moved or its origin changed, which the"
+                "\n# command line cannot express; it renders the whole cell centred."
+            )
+        note = "".join(notes)
         if state.selection_mask is not None:
             flags, exact = _selection_flags(state.selection_criteria, state.selection_mode)
             if exact:
@@ -1144,12 +1272,22 @@ def build_command(state: AppState, ui: dict) -> tuple[list[str], str]:
                 parts.append("--from-selection")
                 parts.append("--selection-output ipf_selection.xyz")
             else:
-                note = (
+                note += (
                     "\n# note: the active selection uses options (per-criterion inversion"
                     "\n# or a quaternion reference) the CLI cannot express; see the"
                     "\n# selection options in `ptmipf --help` for the closest equivalent."
                 )
         return parts, note
+
+
+def _range_pair(text) -> dict:
+    """``MIN:MAX`` from the CLI as the dialog's ``{"min": .., "max": ..}``."""
+    from ..cli import _range_of
+
+    if not text:
+        return {}
+    values = _range_of(text, "--pole-figure-range")
+    return {"min": values.get("vmin"), "max": values.get("vmax")}
 
 
 def parse_command(text: str) -> dict:
@@ -1221,6 +1359,8 @@ def parse_command(text: str) -> dict:
             "tripod_axes": [
                 t.strip() for t in (args.tripod_axes or "").split(";") if t.strip()
             ],
+            "pole_range": _range_pair(args.pole_figure_range),
+            "density_range": _range_pair(args.ipf_density_range),
             "view": args.view or "",
             "fill_radius": args.fill_boundaries,
             "fill_min_neighbours": args.fill_min_neighbours,

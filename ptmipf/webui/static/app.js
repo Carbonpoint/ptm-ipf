@@ -29,6 +29,7 @@ const state = {
   seriesRunning: false,
   poleFamily: null,      // Laue family the pole list was last initialised for
   exportSize: null,      // {label, width, height} for saved images; null = screen size
+  viewFrame: null,       // centre and radius the last render used, for holding the view
 };
 
 /* ------------------------------------------------------------------ */
@@ -253,6 +254,24 @@ function uiOptions() {
     fill_radius: $("fill-on").checked ? parseFloat($("fill-radius").value) || 6 : null,
     fill_min_neighbours: parseInt($("fill-min").value, 10) || 3,
     export_directions: exportDirections(),
+    pole_range: numberRange("pole-vmin", "pole-vmax"),
+    density_range: numberRange("density-vmin", "density-vmax"),
+    // Settings the command line has no way of expressing, so that the dialog
+    // can say so rather than quietly writing a command that draws something
+    // else.
+    extra_slices: extraSlices().length,
+    moved_view: Boolean(
+      Number($("pan-x").value) || Number($("pan-y").value) || $("origin").value.trim()
+    ),
+  };
+}
+
+function numberRange(minId, maxId) {
+  const low = parseFloat($(minId).value);
+  const high = parseFloat($(maxId).value);
+  return {
+    min: Number.isFinite(low) ? low : null,
+    max: Number.isFinite(high) ? high : null,
   };
 }
 
@@ -488,6 +507,7 @@ function viewQuery(extra) {
   sliceParams(params);
   addFillParams(params);
   tripodParams(params);
+  placementParams(params);
   for (const [key, value] of Object.entries(extra || {})) params.set(key, value);
   return params;
 }
@@ -514,7 +534,71 @@ function sliceParams(params) {
     params.set("slice_frac", ($("slice-frac").value / 100).toFixed(3));
   }
   params.set("slice_width", $("slice-width").value || 0);
+  // The extra slices repeat the same three parameters, read together in
+  // order, so the server sees a list of slices rather than one.
+  for (const row of extraSlices()) {
+    params.append("slice_axis", row.axis);
+    params.append("slice_distance", row.distance.toFixed(3));
+    params.append("slice_width", String(row.width));
+  }
+  if (extraSlices().length) params.set("slice_mode", $("slice-mode").value);
   return params;
+}
+
+/* The extra slice rows that are filled in, as the server wants them. */
+function extraSlices() {
+  const rows = [];
+  for (const row of document.querySelectorAll("#slice-list .slice-row")) {
+    const axis = row.querySelector(".slice-row-axis").value.trim();
+    const distance = parseFloat(row.querySelector(".slice-row-distance").value);
+    if (!axis || !Number.isFinite(distance)) continue;
+    rows.push({ axis, distance, width: parseFloat(row.querySelector(".slice-row-width").value) || 0 });
+  }
+  return rows;
+}
+
+/* Another slice, starting from the one above it so it is easy to nudge. */
+function addSliceRow(spec) {
+  const row = document.createElement("div");
+  row.className = "row wrap slice-row";
+  const axis = document.createElement("input");
+  axis.type = "text"; axis.size = 4; axis.spellcheck = false;
+  axis.className = "slice-row-axis";
+  axis.value = (spec && spec.axis) || $("slice-axis").value.trim() || "z";
+  axis.title = "slice plane normal";
+  const distance = document.createElement("input");
+  distance.type = "number"; distance.step = "0.5"; distance.className = "slice-row-distance";
+  distance.title = "position along the normal, in angstroms";
+  distance.value = spec && spec.distance !== undefined
+    ? spec.distance : ($("slice-distance").value || 0);
+  const width = document.createElement("input");
+  width.type = "number"; width.min = "0"; width.step = "1"; width.size = 4;
+  width.className = "slice-row-width";
+  width.value = spec && spec.width !== undefined ? spec.width : ($("slice-width").value || 0);
+  width.title = "slab thickness in angstroms; 0 keeps everything up to the plane";
+  const remove = document.createElement("button");
+  remove.className = "small"; remove.textContent = "x"; remove.title = "remove this slice";
+  remove.addEventListener("click", () => { row.remove(); refreshSliced(); refreshView(); });
+  const unit = document.createElement("span");
+  unit.className = "muted small-unit"; unit.textContent = "\u00c5";
+  const widthLabel = document.createElement("span");
+  widthLabel.className = "muted"; widthLabel.textContent = "width";
+  row.append(axis, distance, unit.cloneNode(true), widthLabel, width, unit, remove);
+  $("slice-list").append(row);
+  attachVectorBoxes(axis);
+  for (const input of [axis, distance, width]) {
+    input.addEventListener("change", () => { refreshSliced(); refreshView(); });
+  }
+  $("extra-slices").hidden = false;
+  if (!$("slice-on").checked) {
+    // Turning the slice on is what makes the primary controls live; the
+    // bounds have to be fetched before the extra rows mean anything.
+    $("slice-on").checked = true;
+    syncAnalyseSlice();
+    updateSliceBounds();
+  }
+  refreshSliced();
+  refreshView();
 }
 
 function figuresSliced() {
@@ -576,6 +660,65 @@ function refreshSliced() {
 /* ------------------------------------------------------------------ */
 /* the triad                                                          */
 /* ------------------------------------------------------------------ */
+/* Where the view sits over the configuration: the pan across the window, the
+ * point it is centred on, and, when the view is held, the size it is scaled
+ * to.  Holding both is what stops a series jumping about between frames. */
+function placementParams(params) {
+  const panX = Number($("pan-x").value) / 100;
+  const panY = Number($("pan-y").value) / 100;
+  if (panX) params.set("pan_x", panX.toFixed(3));
+  if (panY) params.set("pan_y", panY.toFixed(3));
+  const origin = $("origin").value.trim();
+  if (origin) params.set("origin", origin);
+  if ($("view-fixed").checked && state.viewFrame) {
+    if (!origin) params.set("origin", state.viewFrame.center);
+    params.set("scene_radius", state.viewFrame.radius);
+  }
+  return params;
+}
+
+function bindPlacement() {
+  $("place-toggle").addEventListener("click", () => {
+    const panel = $("place-panel");
+    panel.hidden = !panel.hidden;
+  });
+  for (const id of ["pan-x", "pan-y"]) {
+    $(id).addEventListener("input", () => {
+      $(id + "-value").textContent = (Number($(id).value) / 100).toFixed(2);
+      refreshView();
+    });
+  }
+  $("pan-reset").addEventListener("click", () => {
+    for (const id of ["pan-x", "pan-y"]) {
+      $(id).value = 0;
+      $(id + "-value").textContent = "0.00";
+    }
+    refreshView();
+  });
+  $("origin").addEventListener("change", refreshView);
+  $("origin-clear").addEventListener("click", () => { $("origin").value = ""; refreshView(); });
+  $("origin-atom").addEventListener("click", () => {
+    if (!state.atomInfo) { setStatus("click an atom in the view first", "error"); return; }
+    $("origin").value = state.atomInfo.position.map((c) => c.toFixed(3)).join(",");
+    refreshView();
+  });
+  $("view-fixed").addEventListener("change", () => {
+    // Holding the view pins what the camera is doing now, so the numbers have
+    // to be the ones the last render actually used.
+    showViewFrame();
+    refreshView();
+  });
+}
+
+function showViewFrame() {
+  const frame = state.viewFrame;
+  const note = $("view-frame");
+  if (!frame) { note.textContent = ""; return; }
+  note.textContent = $("view-fixed").checked
+    ? `held at ${frame.center} \u00c5, ${Number(frame.radius).toFixed(1)} \u00c5 across`
+    : "";
+}
+
 function tripodParams(params) {
   if (!$("tripod").checked) return params;
   params.set("tripod", 1);
@@ -860,6 +1003,12 @@ async function refreshView() {
     $("view").classList.add("live");
     $("view-placeholder").hidden = true;
     $("download-view").href = "/api/render?" + exportParams(viewQuery({ download: 1 }), true);
+    const center = response.headers.get("X-View-Center");
+    const radius = response.headers.get("X-View-Radius");
+    if (center && radius) {
+      state.viewFrame = { center, radius };
+      showViewFrame();
+    }
     // A decoration OVITO would not draw is a note, not a failure: the view is
     // there, so say what is missing from it and leave it on screen.
     showViewError(response.headers.get("X-Render-Warning") || null, true);
@@ -1020,6 +1169,8 @@ function densityQuery() {
     structure: $("pole-structure").value,
     cmap: $("density-cmap").value,
     smoothing: $("density-smoothing").value,
+    vmin: $("density-vmin").value.trim(),
+    vmax: $("density-vmax").value.trim(),
   });
 }
 
@@ -1035,6 +1186,8 @@ function polesQuery() {
     smoothing: $("pole-smoothing").value,
     up: $("pole-up").value.trim(),
     right: $("pole-right").value.trim(),
+    vmin: $("pole-vmin").value.trim(),
+    vmax: $("pole-vmax").value.trim(),
   });
 }
 
@@ -1688,6 +1841,19 @@ function buildSeriesOutputs() {
   }
 }
 
+/* The camera for a batch render.  Holding the view pins the centre and the
+ * size the current frame is drawn at, so every frame is seen from the same
+ * place instead of the camera refitting itself to each one, which is what
+ * makes a configuration jump about in a movie. */
+function seriesViewQuery() {
+  const params = viewQuery();
+  if ($("series-hold-view").checked && state.viewFrame) {
+    if (!params.get("origin")) params.set("origin", state.viewFrame.center);
+    params.set("scene_radius", state.viewFrame.radius);
+  }
+  return params;
+}
+
 async function startSeries() {
   const series = state.series;
   if (!series || !series.items.length) return;
@@ -1703,7 +1869,7 @@ async function startSeries() {
     label: $("series-stamp").checked,
     out_dir: $("series-outdir").value.trim() || null,
     // A batch render is a saved image, so it takes the chosen size too.
-    view_query: paramsObject(exportParams(viewQuery(), true)),
+    view_query: paramsObject(exportParams(seriesViewQuery(), true)),
     ipfmap_query: paramsObject(exportParams(flatMapQuery(), false)),
     poles_query: paramsObject(exportParams(polesQuery() || figureQuery(), false)),
     density_query: paramsObject(exportParams(densityQuery(), false)),
@@ -2013,6 +2179,9 @@ async function init() {
     if (slab) runAnalysis(true, slab);
   });
   bindSizeDialog();
+  bindPlacement();
+  $("add-slice").addEventListener("click", () => addSliceRow());
+  $("slice-mode").addEventListener("change", () => { refreshSliced(); refreshView(); });
   $("stop").addEventListener("click", stopWork);
   $("rerun").addEventListener("click", rerunAnalysis);
   $("read-columns").addEventListener("click", readColumns);

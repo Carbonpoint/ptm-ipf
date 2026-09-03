@@ -455,3 +455,8 @@ button.gear { padding: 0.1rem 0.35rem; line-height: 1; font-size: 0.95rem; }
 #size-options { display: flex; flex-direction: column; gap: 0.25rem; margin: 0.5rem 0; }
 #size-dialog .row { flex-wrap: wrap; gap: 0.35rem; align-items: center; }
 #size-dialog input[type="number"] { width: 6rem; }
+
+.slice-row { gap: 0.3rem; margin-top: 0.25rem; }
+.slice-row input[type="number"] { width: 5rem; }
+#place-panel .row { gap: 0.4rem; align-items: center; }
+#place-panel input[type="range"] { width: 8rem; }

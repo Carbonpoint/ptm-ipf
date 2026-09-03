@@ -244,6 +244,34 @@ def _draw_frame(ax, up_label: str, right_label: str) -> None:
     ax.axis("off")
 
 
+def _levels(values, contours: int, vmin: float | None, vmax: float | None):
+    """Contour levels for a density plot, over a fixed range when one is given.
+
+    Without a range every figure is scaled to its own peak, which is the right
+    default but makes two figures impossible to compare: the same colour means
+    a different multiple of random in each.  Fixing the range is what turns a
+    series of pole figures into a sequence that can be read.
+    """
+    finite = np.asarray(values)[np.isfinite(values)]
+    low = float(vmin) if vmin is not None else (float(finite.min()) if finite.size else 0.0)
+    high = float(vmax) if vmax is not None else (float(finite.max()) if finite.size else 1.0)
+    if not np.isfinite(low) or not np.isfinite(high) or high <= low:
+        high = low + 1.0
+    return np.linspace(low, high, max(2, int(contours) + 1))
+
+
+def _extend(values, vmin: float | None, vmax: float | None) -> str:
+    """Which ends of the colour bar to mark as running past the range."""
+    finite = np.asarray(values)[np.isfinite(values)]
+    if not finite.size:
+        return "neither"
+    below = vmin is not None and float(finite.min()) < float(vmin)
+    above = vmax is not None and float(finite.max()) > float(vmax)
+    return {(True, True): "both", (True, False): "min", (False, True): "max"}.get(
+        (below, above), "neither"
+    )
+
+
 def pole_figure(
     rotations: np.ndarray,
     poles,
@@ -264,6 +292,8 @@ def pole_figure(
     filename=None,
     dpi: int = 200,
     seed: int = 0,
+    vmin: float | None = None,
+    vmax: float | None = None,
 ):
     """Plot one or more pole figures from crystal-to-sample rotations.
 
@@ -342,7 +372,10 @@ def pole_figure(
         else:
             centers, mrd = _density_grid(x, y, resolution, sigma)
             gx, gy = np.meshgrid(centers, centers, indexing="ij")
-            contour = ax.contourf(gx, gy, mrd, levels=contours, cmap=colors, zorder=3)
+            contour = ax.contourf(
+                gx, gy, mrd, levels=_levels(mrd, contours, vmin, vmax), cmap=colors,
+                zorder=3, extend=_extend(mrd, vmin, vmax),
+            )
             bar = fig.colorbar(contour, ax=ax, fraction=0.046, pad=0.08)
             bar.set_label("MRD", fontsize=9)
 
@@ -376,6 +409,8 @@ def ipf_density(
     filename=None,
     dpi: int = 200,
     seed: int = 0,
+    vmin: float | None = None,
+    vmax: float | None = None,
 ):
     """Plot the density of crystal directions inside the IPF fundamental sector.
 
@@ -433,7 +468,10 @@ def ipf_density(
     # Wide enough, with the bar pushed out, that the corner labels of the
     # sector do not run into the colour bar.
     fig, ax = plt.subplots(figsize=(4.8, 3.4))
-    contour = ax.contourf(gx, gy, mrd, levels=contours, cmap=load_colormap(cmap), zorder=2)
+    contour = ax.contourf(
+        gx, gy, mrd, levels=_levels(mrd, contours, vmin, vmax), cmap=load_colormap(cmap),
+        zorder=2, extend=_extend(mrd, vmin, vmax),
+    )
     bar = fig.colorbar(contour, ax=ax, fraction=0.046, pad=0.16)
     bar.set_label("MRD", fontsize=9)
     ax.plot(ex, ey, color="black", lw=1.0, zorder=3)

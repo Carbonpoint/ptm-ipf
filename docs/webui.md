@@ -76,6 +76,23 @@ header):
   it (in angstroms along the normal) and applies, when *figures too* is
   ticked, to the pole figures, the IPF density and the IPF map as well as to
   the view, so all four show the same atoms.
+* **Several slices at once**: *+ slice* adds another, each with its own
+  normal, position and thickness. *Keep any slice* shows the atoms in any of
+  them, which is how two sections of one configuration are compared side by
+  side; *keep every slice* shows only the atoms in all of them, which is how
+  crossed slabs cut out a bar or a block. Every figure is drawn from the same
+  set, so a pole figure can be made from exactly the atoms wanted. The IPF
+  map, being a section seen face on, takes the first slice as its section and
+  the others as a filter on the atoms in it.
+* **Moving the configuration in the window**: the compass button beside
+  *reset* opens sliders that pan the view across and up, in fractions of the
+  visible height so a pan means the same at any zoom, and a box for the
+  origin, the point the view is centred on and turns about (empty is the
+  middle of the atoms, and *clicked atom* puts it on the last atom picked).
+  *Hold this view across frames* pins the centre and the size the camera is
+  using, so that stepping through a series, or rendering a movie, keeps the
+  configuration in the same place instead of refitting the camera to each
+  frame. The same checkbox appears on the series card.
 * **Triad**: the triad button labels the sample axes; its *advanced* gear
   chooses between the sample axes (RD, TD, ND), the cell axes (x, y, z) and
   three custom directions with their own labels, and has sliders for the
@@ -106,7 +123,13 @@ header):
   first three families, as the colour key does, so an fcc system starts with
   `100,110,111` and an hcp one with `0001,10-10,11-20`. The *up* and *right*
   boxes set the projection axes of the pole figures, and there is a c/a
-  input for non-ideal lattices and a density or scatter mode. Every figure
+  input for non-ideal lattices and a density or scatter mode. The *range*
+  boxes fix the colour scale in MRD, on the pole figures and on the IPF
+  density: leave them empty and each figure is scaled to its own peak, which
+  is right for one figure and wrong for a set that is meant to be compared,
+  and the colour bar is marked where the data runs past the range. On the
+  command line the same thing is `--pole-figure-range 0:20` and
+  `--ipf-density-range :15`, either end of which may be left out. Every figure
   has PNG and SVG download buttons, the rendered view a PNG one, and the
   coloured configuration exports to `.xyz` or `.dump`.
 * **Saved image size**: the gear beside any PNG button sets the size of every

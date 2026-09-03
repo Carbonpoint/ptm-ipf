@@ -225,9 +225,44 @@
           <button id="view-y" class="small">Y</button>
           <button id="view-z" class="small">Z</button>
         </span>
+        <button id="add-slice" class="small" title="Add another slice; the figures show every slice">+ slice</button>
+        <button id="place-toggle" class="small ghost" title="Move the configuration in the window, and fix it for a series">&#10021;</button>
         <button id="reset-view" class="small" title="Reset the camera">reset</button>
         <button id="size-view" class="small gear" title="Choose the size and resolution of the images this page saves">&#9881;</button>
           <a id="download-view" class="small button" title="Download this view as PNG" download>PNG</a>
+      </span>
+    </div>
+    <div id="extra-slices" class="advanced" hidden>
+      <span class="row wrap">
+        <span class="muted">extra slices</span>
+        <label class="inline" title="Show the atoms in any of the slices, or only those in all of them">
+          keep
+          <select id="slice-mode">
+            <option value="any">any slice</option>
+            <option value="all">every slice</option>
+          </select></label>
+      </span>
+      <div id="slice-list"></div>
+    </div>
+    <div id="place-panel" class="advanced" hidden>
+      <span class="row wrap">
+        <span class="muted">move in the window</span>
+        <label class="inline">across <input id="pan-x" type="range" min="-100" max="100" value="0">
+          <span id="pan-x-value" class="muted">0.00</span></label>
+        <label class="inline">up <input id="pan-y" type="range" min="-100" max="100" value="0">
+          <span id="pan-y-value" class="muted">0.00</span></label>
+        <button id="pan-reset" class="small">centre it</button>
+      </span>
+      <span class="row wrap">
+        <label class="inline" title="The point the view turns about and is centred on, in angstroms">
+          origin <input id="origin" type="text" size="16" spellcheck="false" placeholder="middle of the atoms"></label>
+        <button id="origin-atom" class="small" title="Use the atom last clicked as the origin">clicked atom</button>
+        <button id="origin-clear" class="small">middle</button>
+      </span>
+      <span class="row wrap">
+        <label class="inline" title="Keep the camera where it is instead of refitting it to each frame, so a series does not jump about">
+          <input id="view-fixed" type="checkbox"> hold this view across frames</label>
+        <span id="view-frame" class="hint"></span>
       </span>
     </div>
     <div id="tripod-advanced" class="advanced" hidden>
@@ -287,6 +322,9 @@
             <input id="density-smoothing" type="number" min="0" max="40" step="0.5" value="0"
                    size="3"></label>
           <span class="muted">&deg;</span>
+          <label class="inline" title="Fix the colour scale in MRD. Leave empty to scale the figure to its own peak.">range
+            <input id="density-vmin" type="number" step="0.5" size="3" placeholder="min">
+            <input id="density-vmax" type="number" step="0.5" size="3" placeholder="max"></label>
           <button id="size-density" class="small gear" title="Choose the size and resolution of the images this page saves">&#9881;</button>
           <a id="download-density" class="small button" download>PNG</a>
           <a id="download-density-svg" class="small button" download>SVG</a>
@@ -315,6 +353,9 @@ texture; a few degrees brings the intensities onto a comparable scale.">smooth
             <input id="pole-smoothing" type="number" min="0" max="40" step="0.5" value="0"
                    size="3"></label>
           <span class="muted">&deg;</span>
+          <label class="inline" title="Fix the colour scale in MRD, so that two pole figures can be compared. Leave empty to scale each figure to its own peak.">range
+            <input id="pole-vmin" type="number" step="0.5" size="3" placeholder="min">
+            <input id="pole-vmax" type="number" step="0.5" size="3" placeholder="max"></label>
           <button id="size-poles" class="small gear" title="Choose the size and resolution of the images this page saves">&#9881;</button>
           <a id="download-poles" class="small button" download>PNG</a>
           <a id="download-poles-svg" class="small button" download>SVG</a>
@@ -365,6 +406,8 @@ texture; a few degrees brings the intensities onto a comparable scale.">smooth
       <label class="inline">seconds per frame
         <input id="series-seconds" type="number" min="0.02" step="0.1" value="0.5" size="4"></label>
       <label class="inline"><input id="series-stamp" type="checkbox" checked> label frames</label>
+      <label class="inline" title="Use the camera as it stands for every frame, instead of fitting it to each one, so the configuration keeps its place through the movie">
+        <input id="series-hold-view" type="checkbox" checked> hold the view</label>
     </div>
     <div id="series-outputs" class="series-outputs"></div>
     <div class="row wrap">

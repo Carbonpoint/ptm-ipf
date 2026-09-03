@@ -259,3 +259,35 @@ def test_tripod_axes_are_split_into_directions_and_labels():
     assert _tripod_axes("rd;td;nd") == (["rd", "td", "nd"], ["", "", ""])
     assert _tripod_axes("1,1,0=loading; nd ;td=T") == (["1,1,0", "nd", "td"], ["loading", "", "T"])
     assert _tripod_axes("") == (["rd", "td", "nd"], ["", "", ""])
+
+
+def test_pole_figure_range_fixes_the_scale(crystal, tmp_path):
+    matplotlib = pytest.importorskip("matplotlib")
+    matplotlib.use("Agg")
+    assert main([
+        crystal, "--structures", "hcp", "-q", "--no-export-directions",
+        "--pole-figure", "0001",
+        "--pole-figure-file", str(tmp_path / "pf.png"),
+        "--pole-figure-range", "0:20",
+        "--ipf-density", str(tmp_path / "density.png"),
+        "--ipf-density-range", ":15",
+    ]) == 0
+    assert (tmp_path / "pf.png").stat().st_size > 0
+    assert (tmp_path / "density.png").stat().st_size > 0
+
+
+@pytest.mark.parametrize("text", ["0", "0:20:30", "low:high", "20:5"])
+def test_a_malformed_range_is_refused(text):
+    from ptmipf.cli import _range_of
+
+    with pytest.raises(SystemExit):
+        _range_of(text, "--pole-figure-range")
+
+
+def test_a_half_open_range_leaves_one_end_to_the_data():
+    from ptmipf.cli import _range_of
+
+    assert _range_of("0:20", "--x") == {"vmin": 0.0, "vmax": 20.0}
+    assert _range_of(":20", "--x") == {"vmin": None, "vmax": 20.0}
+    assert _range_of("2:", "--x") == {"vmin": 2.0, "vmax": None}
+    assert _range_of("", "--x") == {}
