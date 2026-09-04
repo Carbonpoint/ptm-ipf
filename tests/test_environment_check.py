@@ -109,3 +109,40 @@ def test_a_dll_failure_on_a_supported_python_talks_about_qt(monkeypatch):
     monkeypatch.setattr("sys.version_info", _version(3, 13))
     message = state._explain_ovito(ImportError("DLL load failed while importing x"))
     assert "PySide6" in message and "3.13" not in message
+
+
+def _fake_metadata(monkeypatch, requires, installed):
+    """Stand in for the installed OVITO and PySide6, without installing either."""
+    import importlib.metadata as metadata
+
+    from ptmipf.webui import state
+
+    versions = {"PySide6": installed, "ovito": "3.15.5"}
+    monkeypatch.setattr(metadata, "requires", lambda name: requires)
+    monkeypatch.setattr(metadata, "version", lambda name: versions[name])
+    return state
+
+
+def test_a_qt_that_this_ovito_cannot_use_is_named_with_the_fix(monkeypatch):
+    """The import error names neither package, so the check has to."""
+    state = _fake_metadata(
+        monkeypatch, ["numpy>=2", "PySide6~=6.10.3"], installed="6.11.2"
+    )
+    ok, detail = state._qt_pairing_check()
+    assert not ok
+    assert "6.11.2" in detail and "~=6.10.3" in detail
+    assert 'uv pip install "PySide6~=6.10.3"' in detail
+
+
+def test_a_matching_qt_passes_quietly(monkeypatch):
+    state = _fake_metadata(
+        monkeypatch, ["numpy>=2", "PySide6~=6.10.3"], installed="6.10.3"
+    )
+    assert state._qt_pairing_check() == (True, "PySide6 6.10.3")
+
+
+def test_an_ovito_that_does_not_constrain_qt_is_not_second_guessed(monkeypatch):
+    """OVITO 3.15.5 asks for PySide6>=6.8.3 and means it, as far as we know."""
+    state = _fake_metadata(monkeypatch, ["numpy>=2", "PySide6>=6.8.3"], installed="6.11.2")
+    ok, detail = state._qt_pairing_check()
+    assert ok and "6.11.2" in detail

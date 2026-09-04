@@ -320,4 +320,12 @@ uv venv --python 3.13 --clear
 uv pip install git+https://github.com/Carbonpoint/ptm-ipf.git
 ```
 
-`ptmipf-ui --check` says this in place of the raw error.
+`ptmipf-ui --check` says this in place of the raw error. It also compares the
+installed PySide6 against the requirement in the installed OVITO's own
+metadata, before OVITO is imported, and prints the `uv pip install` line that
+puts the pair right. The rule comes from OVITO, so it holds for versions that
+do not exist yet.
+
+The tests run on Linux, Windows and macOS across Python 3.11 to 3.14, and each
+job prints `--check` before the tests, so a platform where the pair no longer
+resolves is caught there rather than on a working machine.

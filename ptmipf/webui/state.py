@@ -974,6 +974,7 @@ def _probe_environment() -> dict:
     # and the failure does not say so.  Reported before OVITO because the
     # OVITO check returns early when it fails.
     record("git", *_git_check())
+    record("ovito and Qt", *_qt_pairing_check())
     record("mp4 movies", *_movie_check())
 
     try:
@@ -1048,6 +1049,43 @@ def _git_check() -> tuple[bool, str]:
         "git is not on the PATH, so installing or updating with "
         f"'uv pip install git+https://...' will fail: {how}. Without git, "
         "download the repository as a ZIP and run 'uv pip install .' in it."
+    )
+
+
+def _qt_pairing_check() -> tuple[bool, str]:
+    """Whether the installed PySide6 is the one this OVITO asks for.
+
+    OVITO's bindings are compiled against one Qt.  When the two do not match
+    the import fails with a DLL or symbol error that names neither package,
+    which is a hard thing to work out from the message alone.  The rule is
+    read from OVITO's own metadata, so it stays true for versions that do not
+    exist yet.
+    """
+    import importlib.metadata as metadata
+
+    try:
+        from packaging.requirements import Requirement
+        from packaging.version import Version
+    except ImportError:  # pragma: no cover - packaging comes with pip and uv
+        return True, "not checked: the packaging module is not installed"
+    try:
+        wanted = [
+            Requirement(text)
+            for text in (metadata.requires("ovito") or [])
+            if Requirement(text).name.lower() == "pyside6"
+        ]
+        installed = metadata.version("PySide6")
+    except metadata.PackageNotFoundError as exc:
+        return False, f"not installed: {exc}"
+    if not wanted:
+        return True, f"PySide6 {installed}, which this OVITO does not constrain"
+    rule = wanted[0]
+    if rule.specifier.contains(Version(installed), prereleases=True):
+        return True, f"PySide6 {installed}"
+    return False, (
+        f"OVITO {metadata.version('ovito')} is built for PySide6 "
+        f"{rule.specifier}, but PySide6 {installed} is installed. The 3D view "
+        f"will not load. Fix it with: uv pip install \"PySide6{rule.specifier}\""
     )
 
 

@@ -7,19 +7,47 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # The install is the fragile part across platforms: OVITO ships one wheel
+    # per Python version per platform, and its bindings are built against one
+    # Qt.  A pair that cannot load is a DLL error at import, so every platform
+    # this is used on is installed and imported here.
+    name: ${{ matrix.os }} py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.13"]
+        include:
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.13"
+          - os: ubuntu-latest
+            python-version: "3.14"
+          - os: windows-latest
+            python-version: "3.13"
+          # Windows and 3.14 has no OVITO 3.16 wheel, so it takes 3.15.5 with
+          # PySide6 held to the Qt series that OVITO is built against.  That
+          # pairing is exactly what broke, so it is tested.
+          - os: windows-latest
+            python-version: "3.14"
+          - os: macos-latest
+            python-version: "3.13"
     steps:
       - uses: actions/checkout@v4
       - name: Install the OpenGL runtime OVITO links against
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libopengl0 libegl1 libglu1-mesa
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install
         run: uv pip install -e ".[test]"
+      - name: Report the environment
+        # Never fails the job: it says which OVITO and Qt were resolved here,
+        # and whether the 3D view works, which is the first thing to look at
+        # when a platform starts failing.  Called as a module, because the
+        # console script may not be on the PATH on every runner.
+        continue-on-error: true
+        run: python -m ptmipf.webui --check
       - name: Run the tests
         run: pytest -q
