@@ -807,6 +807,10 @@ def test_a_slice_with_no_atoms_left_is_a_message_not_a_traceback(base, analysed)
 def test_slice_bounds_take_a_vector_axis(base, analysed):
     bounds = _get_json(base, "/api/slicebounds?axis=1,1,0")
     assert bounds["min"] < bounds["max"]
+
+
+def test_a_vector_slice_can_be_drawn(base, analysed, renderer):
+    """Drawing needs OVITO, so this half of the check skips without it."""
     _, _, body = _get(
         base, "/api/render?w=200&h=160&slice_axis=1,1,0&slice_distance=0&slice_width=8"
     )

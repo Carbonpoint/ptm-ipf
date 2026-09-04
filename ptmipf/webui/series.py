@@ -161,6 +161,13 @@ class SeriesJob(threading.Thread):
             raise ValueError("the frame range is outside the series")
         self.items = items[start : stop + 1 : step]
         self.stills, self.movies = _wanted(body.get("outputs"))
+        # Refuse an encoder we do not have now, before a quarter of an hour of
+        # matching is spent on frames that could never be joined up.
+        for formats in self.movies.values():
+            for ext in sorted(formats):
+                missing = animate.video_support(ext)
+                if missing:
+                    raise ValueError(missing)
         self.seconds = float(body.get("seconds_per_frame", 0.5))
         if not 0.01 <= self.seconds <= 60:
             raise ValueError("seconds per frame must be between 0.01 and 60")
@@ -188,6 +195,7 @@ class SeriesJob(threading.Thread):
         self.stage = ""
         self.files: list[str] = []
         self.error = ""
+        self.notes: list[str] = []
         self.seconds_per_item: float | None = None
 
     # -- status -----------------------------------------------------------
@@ -203,6 +211,7 @@ class SeriesJob(threading.Thread):
             "progress": (done / n) if n else 1.0,
             "files": list(self.files),
             "error": self.error,
+            "notes": list(self.notes),
             "elapsed": round((self.finished or time.time()) - self.started, 1),
             "seconds_per_item": self.seconds_per_item,
             "out_dir": _relative(self.state, self.out_dir),
@@ -246,6 +255,12 @@ class SeriesJob(threading.Thread):
                 self._render(kind, result, item, scratch, frames)
             self.seconds_per_item = round(time.time() - tick, 2)
         self.item = len(self.items)
+        self._write_movies(frames)
+        self.stage = ""
+        self.state_name = "done"
+
+    def _write_movies(self, frames: dict) -> None:
+        """Join the rendered frames into each movie that was asked for."""
         for kind, formats in self.movies.items():
             self.stage = f"writing {OUTPUTS[kind]['label']} movie"
             pngs = frames[kind]
@@ -253,10 +268,14 @@ class SeriesJob(threading.Thread):
                 continue
             for ext in sorted(formats):
                 out = self.out_dir / f"{self.series['stem']}_{kind}.{ext}"
-                animate.write_video(pngs, out, fps=1.0 / self.seconds)
+                try:
+                    animate.write_video(pngs, out, fps=1.0 / self.seconds)
+                except Exception as exc:
+                    # Every frame is already rendered.  One encoder that will
+                    # not run must not throw the whole series away.
+                    self.notes.append(f"the {ext} movie could not be written: {exc}")
+                    continue
                 self.files.append(out.name)
-        self.stage = ""
-        self.state_name = "done"
 
     def _filled(self, result):
         query = self.queries["view"]

@@ -1820,6 +1820,7 @@ function gotoSeriesItem(index) {
 
 function buildSeriesOutputs() {
   const box = $("series-outputs");
+  box.replaceChildren();
   for (const [kind, label, formats] of SERIES_OUTPUTS) {
     const row = document.createElement("div");
     row.className = "row wrap output-row";
@@ -1834,6 +1835,15 @@ function buildSeriesOutputs() {
       input.type = "checkbox";
       input.value = `${kind}:${ext}`;
       input.checked = (kind === "view" && ext === "png") || (kind === "ipfmap" && ext === "gif");
+      // A format this environment cannot write is shown, but cannot be asked
+      // for: the reason names the package that would make it work.
+      const why = (state.movies || {})[ext] || "";
+      if (why) {
+        input.disabled = true;
+        input.checked = false;
+        check.title = why;
+        check.className = "inline muted";
+      }
       check.append(input, ext === "gif" || ext === "mp4" ? `${ext} movie` : `${ext} stills`);
       row.append(check);
     }
@@ -1940,6 +1950,12 @@ function showSeries(status) {
       `in ${duration(status.elapsed)}`;
     note.className = "muted note";
   }
+  // A movie that could not be written leaves the frames behind, so the run is
+  // reported as done and the trouble is said here rather than thrown away.
+  const notes = status.notes || [];
+  const warn = $("series-notes");
+  warn.textContent = notes.join("; ");
+  warn.hidden = !notes.length;
   const links = status.files.map((name) => {
     const link = document.createElement("a");
     link.href = "/api/series/file?path=" + encodeURIComponent(name) + "&download=1";
@@ -2306,6 +2322,9 @@ async function init() {
   checkEnvironment();
   // Pick up an analysis, or a series render, that survived a page reload.
   const status = await api("/api/status");
+  // The rows were built before the server was asked which movie formats it
+  // can write, so build them again now that the answer is here.
+  if (status.movies) { state.movies = status.movies; buildSeriesOutputs(); }
   if (status.state === "running") { state.running = true; pollUntilDone(); }
   else if (status.result) applyStatus(status);
   syncRunControls();

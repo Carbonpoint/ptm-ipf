@@ -23,6 +23,7 @@ the server as a subprocess.
 from __future__ import annotations
 
 import dataclasses
+import functools
 import threading
 import time
 from collections import OrderedDict
@@ -252,6 +253,23 @@ def _slab_for_analysis(slab: dict, colour: dict) -> dict:
     if matrix is not None:
         spec["rotation"] = (matrix, None)
     return spec
+
+
+@functools.lru_cache(maxsize=1)
+def movie_support() -> dict:
+    """Which movie formats this environment can write, and why not.
+
+    The answer cannot change while the server runs, so it is worked out once
+    and sent with every status, which is how the interface knows to grey out
+    a format instead of letting somebody wait for a run that cannot finish.
+    """
+    from .. import animate
+
+    out = {}
+    for suffix in animate.VIDEO_NEEDS:
+        ext = suffix.lstrip(".")
+        out[ext] = animate.video_support(suffix)
+    return out
 
 
 def run_ptm(analysis: dict, colour: dict, progress=None, path=None, frame_index=None):
@@ -698,6 +716,7 @@ class AppState:
             for key in ("stage_started", "stage_expected", "stage_index", "file_bytes"):
                 payload.pop(key, None)
             payload["generation"] = self.generation
+            payload["movies"] = movie_support()
             if self.result is not None:
                 result = self.result
                 payload["result"] = {

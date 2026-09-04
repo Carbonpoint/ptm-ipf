@@ -261,6 +261,35 @@ def _pad_to_common_size(pngs):
             canvas.save(p)
 
 
+#: What each movie format needs, and the line that installs it.
+VIDEO_NEEDS = {
+    ".mp4": ("imageio and imageio-ffmpeg", "pip install 'imageio[ffmpeg]'"),
+    ".gif": ("Pillow", "pip install pillow"),
+}
+
+
+def video_support(suffix: str) -> str:
+    """Say why *suffix* cannot be written here, or "" when it can.
+
+    A series can take a quarter of an hour to render.  Asking this before the
+    first frame is matched, rather than when the encoder is finally called,
+    is the difference between a message and a wasted afternoon.
+    """
+    suffix = suffix if suffix.startswith(".") else "." + suffix
+    if suffix not in VIDEO_NEEDS:
+        return f"{suffix.lstrip('.')} is not a movie format"
+    what, how = VIDEO_NEEDS[suffix]
+    try:
+        if suffix == ".mp4":
+            import imageio.v2  # noqa: F401
+            import imageio_ffmpeg  # noqa: F401
+        else:
+            import PIL.Image  # noqa: F401
+    except ImportError:
+        return f"{suffix.lstrip('.')} output needs {what}: {how}"
+    return ""
+
+
 def write_video(pngs, out, fps: float = 4):
     """Join PNGs into an MP4 (via imageio/ffmpeg) or a GIF (via Pillow).
 
@@ -275,12 +304,10 @@ def write_video(pngs, out, fps: float = 4):
         duration = max(1, int(round(1000 / fps)))
         frames[0].save(out, save_all=True, append_images=frames[1:], duration=duration, loop=0)
         return str(out)
-    try:
-        import imageio.v2 as imageio
-    except ImportError as error:  # pragma: no cover
-        raise ImportError(
-            "MP4 output needs imageio and imageio-ffmpeg: pip install 'imageio[ffmpeg]'"
-        ) from error
+    missing = video_support(out.suffix)
+    if missing:  # pragma: no cover - depends on what is installed
+        raise ImportError(missing)
+    import imageio.v2 as imageio
     with imageio.get_writer(
         str(out), fps=fps, codec="libx264", quality=8, macro_block_size=1
     ) as writer:
