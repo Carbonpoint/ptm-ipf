@@ -1,4 +1,4 @@
-"""What happens when the environment cannot write the movie that was asked for.
+"""What the environment is missing, said before it costs anybody time.
 
 A series can run for a quarter of an hour.  Finding out at the end that no
 encoder is installed, and losing every rendered frame with it, is the failure
@@ -58,3 +58,23 @@ def test_an_encoder_that_fails_leaves_the_stills_and_says_so(monkeypatch, tmp_pa
     job._write_movies({"poles": [tmp_path / "poles_00000.png"]})
     assert job.files == []
     assert job.notes == ["the mp4 movie could not be written: no encoder here"]
+
+
+def test_the_environment_check_names_git_and_how_to_install_it(monkeypatch):
+    """Most people arrive here because 'uv pip install git+https://...' failed."""
+    from ptmipf.webui import state
+
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    monkeypatch.setattr("platform.system", lambda: "Windows")
+    ok, detail = state._git_check()
+    assert not ok
+    assert "winget install Git.Git" in detail
+    monkeypatch.setattr("platform.system", lambda: "Linux")
+    assert "sudo apt install git" in state._git_check()[1]
+
+
+def test_the_environment_check_finds_git_when_it_is_there(monkeypatch):
+    from ptmipf.webui import state
+
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/git")
+    assert state._git_check() == (True, "/usr/bin/git")

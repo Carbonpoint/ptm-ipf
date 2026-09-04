@@ -55,6 +55,11 @@ or with pip:
 pip install git+https://github.com/Carbonpoint/ptm-ipf.git
 ```
 
+Both forms need Git on the PATH, because they fetch the repository: `winget install
+Git.Git` on Windows, `sudo apt install git` on Linux. Without Git, download the
+repository as a ZIP and run `uv pip install .` in the unpacked folder.
+`ptmipf-ui --check` reports whether Git was found, along with everything else.
+
 On a bare Linux machine OVITO also needs the OpenGL runtime:
 `sudo apt install libopengl0 libegl1`. Without root, a symlink works:
 `ln -s /usr/lib/x86_64-linux-gnu/libGL.so.1 <somewhere>/libOpenGL.so.0` and run with

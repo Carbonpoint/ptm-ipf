@@ -932,6 +932,13 @@ def _probe_environment() -> dict:
         if fatal and not ok:
             report["ok"] = False
 
+    # Git first: it is not needed to run anything, but "uv pip install
+    # git+https://..." fails without it, which is how most people get here,
+    # and the failure does not say so.  Reported before OVITO because the
+    # OVITO check returns early when it fails.
+    record("git", *_git_check())
+    record("mp4 movies", *_movie_check())
+
     try:
         import ovito
 
@@ -986,6 +993,35 @@ def _probe_environment() -> dict:
     else:
         record("3D view", False, "; ".join(errors) or "no renderer worked", fatal=True)
     return report
+
+
+def _git_check() -> tuple[bool, str]:
+    """Whether git is on the PATH, and the command that installs it if not."""
+    import platform
+    import shutil
+
+    found = shutil.which("git")
+    if found:
+        return True, found
+    how = {
+        "Windows": "winget install Git.Git",
+        "Darwin": "xcode-select --install",
+    }.get(platform.system(), "sudo apt install git")
+    return False, (
+        "git is not on the PATH, so installing or updating with "
+        f"'uv pip install git+https://...' will fail: {how}. Without git, "
+        "download the repository as a ZIP and run 'uv pip install .' in it."
+    )
+
+
+def _movie_check() -> tuple[bool, str]:
+    """Whether an MP4 can be written here. GIF needs only Pillow, checked above."""
+    from .. import animate
+
+    missing = animate.video_support(".mp4")
+    if missing:
+        return False, missing + " (GIF movies still work)"
+    return True, ""
 
 
 def _explain_ovito(exc: Exception) -> str:
