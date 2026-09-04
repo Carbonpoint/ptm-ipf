@@ -101,9 +101,9 @@ without it:
 winget install Git.Git
 ```
 
-Make the environment. Use Python 3.13 here, not 3.14. OVITO has no 3.16 build for
-Python 3.14 on Windows, so an older OVITO is installed against a Qt it cannot load,
-and the 3D view then fails with `DLL load failed while importing ovito_bindings`:
+Make the environment. Use Python 3.13 on Windows. OVITO has no 3.16 build for Python
+3.14 there, so 3.14 gets OVITO 3.15.5, which is held to the same Qt but is not the
+version this is tested against. Python 3.13 is:
 
 ```powershell
 uv venv --python 3.13 --clear

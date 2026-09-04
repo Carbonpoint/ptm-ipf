@@ -26,13 +26,16 @@ dependencies = [
     "numpy>=1.22",
     "scipy>=1.8",
     "matplotlib>=3.5",
-    # OVITO's compiled bindings are built against one Qt: 3.16 pins
-    # PySide6~=6.10.3, but 3.15.5 accepts any PySide6>=6.8.3 and then fails to
-    # load against a newer one.  There is no 3.16 wheel for Python 3.14 on
-    # Windows, so that combination is refused here rather than installed and
-    # found broken later.
+    # OVITO's compiled bindings are built against one Qt.  Version 3.16 pins
+    # PySide6~=6.10.3; 3.15.5 accepts any PySide6>=6.8.3 and then will not load
+    # against a newer one, which is a DLL error at import and an empty 3D view.
+    # There is no 3.16 wheel for Python 3.14 on Windows, so that combination
+    # gets 3.15.5 with the Qt that 3.16 asks for, rather than whatever is
+    # newest.  Python 3.13 is the version to use on Windows; see the README.
     "ovito>=3.7; python_version < '3.14'",
-    "ovito>=3.16; python_version >= '3.14'",
+    "ovito>=3.16; python_version >= '3.14' and sys_platform != 'win32'",
+    "ovito>=3.15.5; python_version >= '3.14' and sys_platform == 'win32'",
+    "PySide6>=6.10.3,<6.11; python_version >= '3.14' and sys_platform == 'win32'",
     # imageio-ffmpeg carries its own ffmpeg build, which is tens of megabytes,
     # but a movie of a run is what most people want a series render for, and
     # having to install it afterwards is a poor way to find that out.
