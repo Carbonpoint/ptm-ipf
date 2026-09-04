@@ -15,6 +15,10 @@
     <progress id="header-progress" max="1" value="0" hidden></progress>
   </span>
   <button id="cmd-button" class="ghost" title="Show the equivalent ptmipf command line" disabled>CLI command</button>
+  <button id="session-save" class="ghost" title="Save every setting on this page to a file, so this session can be opened again exactly as it is">Save session</button>
+  <button id="session-load" class="ghost" title="Open a session file saved earlier and put every setting back">Load session</button>
+  <input id="session-file" type="file" accept=".json,application/json" hidden title="The session file to open">
+  <a class="ghost button" href="https://github.com/Carbonpoint/ptm-ipf/blob/main/docs/webui.md" target="_blank" rel="noopener" title="The manual for this page, on GitHub. Every control here also has its own tooltip.">Help</a>
   <a class="ghost button" href="/examples" title="Build a small polycrystal and a LAMMPS run to try this on">Examples</a>
   <button id="theme-toggle" class="ghost" title="Toggle light/dark theme">◐</button>
 </header>
@@ -26,11 +30,11 @@
     <summary>Data</summary>
     <label>Configuration file
       <span class="row">
-        <input id="path" type="text" placeholder="path under the served root" spellcheck="false">
+        <input id="path" type="text" placeholder="path under the served root" spellcheck="false" title="The configuration file to analyse, as a path under the folder being served. Use the … button to browse, or to change the folder.">
         <button id="browse" class="small" title="Browse the served directory">…</button>
       </span>
     </label>
-    <label class="inline">Trajectory frame <input id="frame-index" type="number" value="0" min="0"></label>
+    <label class="inline">Trajectory frame <input id="frame-index" type="number" value="0" min="0" title="Which frame of a trajectory file to read. The first frame is 0."></label>
     <div id="series-nav" class="series-nav" hidden>
       <span class="row">
         <button id="series-prev" class="small" title="previous frame of the series">&#9664;</button>
@@ -40,7 +44,7 @@
       <span id="series-info" class="hint"></span>
     </div>
     <span class="row">
-      <button id="analyse" class="primary">Analyse</button>
+      <button id="analyse" class="primary" title="Run PTM on the file and colour it. Everything else on the page works on the result.">Analyse</button>
       <button id="analyse-slice" class="small" disabled
         title="Run the analysis on the atoms in the slice only (set a slice in the 3D view first). Faster, and every later figure works on the slice alone.">Analyse slice</button>
       <button id="stop" class="small danger" hidden
@@ -63,7 +67,7 @@
       title="PTM RMSD cutoff; 0 disables it"></label>
     <label>Colour only <span class="hint">(others keep the “other” colour)</span></label>
     <div id="color-only" class="checks"></div>
-    <label class="inline">“Other” colour <input id="other-color" type="color" value="#595959"></label>
+    <label class="inline">“Other” colour <input id="other-color" type="color" value="#595959" title="The colour for atoms that are not coloured by orientation, unindexed atoms among them"></label>
   </details>
 
   <details id="columns-section">
@@ -71,10 +75,10 @@
     <p class="hint">For a configuration another OVITO session has already run PTM on.
     Name the columns that hold the quaternions and they are coloured directly, with no
     second PTM run.</p>
-    <label class="inline"><input id="use-columns" type="checkbox">
+    <label class="inline"><input id="use-columns" type="checkbox" title="Colour from orientations already in the file instead of running PTM again">
       read the orientations from columns</label>
     <div class="row">
-      <button id="read-columns" class="small">Read the columns</button>
+      <button id="read-columns" class="small" title="Read the column names from the file, so the quaternion columns can be picked">Read the columns</button>
       <span id="columns-status" class="muted"></span>
     </div>
     <div id="column-map" hidden></div>
@@ -82,13 +86,13 @@
 
   <details open>
     <summary>Boundary filling</summary>
-    <label class="inline"><input id="fill-on" type="checkbox"> fill unindexed atoms</label>
+    <label class="inline"><input id="fill-on" type="checkbox" title="Give unindexed atoms the average orientation of their indexed neighbours"> fill unindexed atoms</label>
     <div class="row wrap">
       <label class="inline">radius
-        <input id="fill-radius" type="number" min="1" step="0.5" value="6" size="4"></label>
+        <input id="fill-radius" type="number" min="1" step="0.5" value="6" size="4" title="How far to look for indexed neighbours, in angstroms"></label>
       <span class="muted">&#8491;</span>
       <label class="inline">min neighbours
-        <input id="fill-min" type="number" min="1" step="1" value="3" size="3"></label>
+        <input id="fill-min" type="number" min="1" step="1" value="3" size="3" title="How many indexed neighbours an atom needs before it is filled"></label>
     </div>
     <p class="muted note">
       Unindexed atoms take the average orientation of the indexed atoms within the
@@ -98,7 +102,7 @@
 
   <details open>
     <summary>IPF projection direction</summary>
-    <div class="row wrap" id="direction-buttons">
+    <div class="row wrap" id="direction-buttons" title="Colour by the crystal direction that points along this sample axis">
       <button data-dir="x" class="small">x</button>
       <button data-dir="y" class="small">y</button>
       <button data-dir="z" class="small">z</button>
@@ -116,10 +120,10 @@
     <p class="hint">Assign a specific direction, in cell coordinates, to each named sample
     axis, e.g. RD = <code>1,0,0</code>. Missing axes are completed to a right-handed triad.
     The named axes are what the IPF direction, the pole figure axes and the triad refer to.</p>
-    <label class="inline">RD <input id="axis-rd" type="text" placeholder="1,0,0" spellcheck="false" data-vector></label>
-    <label class="inline">TD <input id="axis-td" type="text" placeholder="0,1,0" spellcheck="false" data-vector></label>
-    <label class="inline">ND <input id="axis-nd" type="text" placeholder="0,0,1" spellcheck="false" data-vector></label>
-    <label class="inline">ED <input id="axis-ed" type="text" placeholder="unset" spellcheck="false" data-vector></label>
+    <label class="inline">RD <input id="axis-rd" type="text" placeholder="1,0,0" spellcheck="false" data-vector title="The rolling direction, in cell coordinates"></label>
+    <label class="inline">TD <input id="axis-td" type="text" placeholder="0,1,0" spellcheck="false" data-vector title="The transverse direction, in cell coordinates"></label>
+    <label class="inline">ND <input id="axis-nd" type="text" placeholder="0,0,1" spellcheck="false" data-vector title="The normal direction, in cell coordinates"></label>
+    <label class="inline">ED <input id="axis-ed" type="text" placeholder="unset" spellcheck="false" data-vector title="A fourth named direction, for whatever the study calls for"></label>
   </details>
 
   <details>
@@ -129,8 +133,8 @@
     Changing one recolours without running PTM again.</p>
     <div id="rotations"></div>
     <span class="row">
-      <button id="add-rotation" class="small">+ add rotation</button>
-      <button id="clear-rotations" class="small ghost">clear</button>
+      <button id="add-rotation" class="small" title="Add a rotation about one axis of the sample frame">+ add rotation</button>
+      <button id="clear-rotations" class="small ghost" title="Remove every rotation and put the system back as it was read">clear</button>
     </span>
   </details>
 
@@ -143,7 +147,7 @@
     <div id="selection-ui">
       <div id="criteria"></div>
       <span class="row">
-        <select id="criterion-kind">
+        <select id="criterion-kind" title="The kind of criterion to add to the selection">
           <option value="structure">structure</option>
           <option value="type">particle type</option>
           <option value="rmsd">RMSD range</option>
@@ -151,31 +155,31 @@
           <option value="ipf">orientation near direction</option>
           <option value="misorientation">misorientation from reference</option>
         </select>
-        <button id="add-criterion" class="small">+ add</button>
+        <button id="add-criterion" class="small" title="Add the chosen criterion to the selection">+ add</button>
       </span>
       <span class="row">
         <label class="inline">combine
-          <select id="combine-mode"><option value="and">and</option><option value="or">or</option></select>
+          <select id="combine-mode" title="Whether an atom must satisfy every criterion, or any one of them"><option value="and">and</option><option value="or">or</option></select>
         </label>
-        <button id="apply-selection" class="primary small">Apply</button>
-        <button id="clear-selection" class="small">Clear</button>
+        <button id="apply-selection" class="primary small" title="Select the atoms that satisfy the criteria">Apply</button>
+        <button id="clear-selection" class="small" title="Remove every criterion and select nothing">Clear</button>
       </span>
       <div id="selection-count" class="muted"></div>
       <label class="inline">in 3D view
-        <select id="highlight-mode">
+        <select id="highlight-mode" title="What the 3D view does with the selection">
           <option value="highlight">highlight selection</option>
           <option value="only">show only selection</option>
           <option value="off">ignore selection</option>
         </select>
       </label>
-      <label class="inline"><input id="figures-from-selection" type="checkbox">
+      <label class="inline"><input id="figures-from-selection" type="checkbox" title="Draw the pole figures, the IPF density and the IPF map from the selected atoms only">
         figures from selection only</label>
     </div>
   </details>
 
   <details open>
     <summary>Export</summary>
-    <div class="row wrap">
+    <div class="row wrap" title="Write the coloured atoms to a file, which opens in OVITO already coloured">
       <button class="small" data-export="extxyz" data-selection="0">full .xyz</button>
       <button class="small" data-export="lammps-dump" data-selection="0">full .dump</button>
       <button class="small" data-export="extxyz" data-selection="1">selection .xyz</button>
@@ -194,7 +198,7 @@
       gradient to <em>Load custom color map</em> with the file below.
     </p>
     <div class="row wrap">
-      <a id="download-colormap" class="small button" download>colour map .png</a>
+      <a id="download-colormap" class="small button" download title="The colour map file OVITO needs to show the scalar IPF columns in this file's colours">colour map .png</a>
     </div>
   </details>
 
@@ -205,10 +209,10 @@
     <div class="card-head">
       <h2>3D IPF map <span id="view-label" class="muted"></span></h2>
       <span class="row wrap">
-        <label class="inline"><input id="hide-other" type="checkbox"> hide other</label>
-        <label class="inline"><input id="tripod" type="checkbox"> triad</label>
+        <label class="inline"><input id="hide-other" type="checkbox" title="Hide the atoms that are not coloured by orientation, so the inside can be seen"> hide other</label>
+        <label class="inline"><input id="tripod" type="checkbox" title="Draw a triad of the sample axes in the corner of the view"> triad</label>
         <button id="tripod-advanced-toggle" class="small ghost" title="triad labels, size and position">&#9881;</button>
-        <label class="inline"><input id="slice-on" type="checkbox"> slice</label>
+        <label class="inline"><input id="slice-on" type="checkbox" title="Show only a slab of the configuration, cut by a plane"> slice</label>
         <input id="slice-axis" type="text" value="z" size="4" spellcheck="false" data-vector
                title="slice plane normal: an axis, a named sample axis or a vector">
         <input id="slice-frac" type="range" min="0" max="100" value="60" title="slice position">
@@ -227,6 +231,13 @@
         </span>
         <button id="add-slice" class="small" title="Add another slice; the figures show every slice">+ slice</button>
         <button id="place-toggle" class="small ghost" title="Move the configuration in the window, and fix it for a series">&#10021;</button>
+        <span class="row" title="The camera angles, for a view you can write down and come back to. Azimuth turns around the vertical, elevation lifts above the horizon.">
+          <label class="inline">az <input id="cam-az" type="number" step="1" size="5" class="slice-number"></label>
+          <span class="muted small-unit">&#176;</span>
+          <label class="inline">el <input id="cam-el" type="number" step="1" min="-89" max="89" size="5" class="slice-number"></label>
+          <span class="muted small-unit">&#176;</span>
+          <label class="inline">zoom <input id="cam-zoom" type="number" step="0.1" min="0.1" max="40" size="5" class="slice-number"></label>
+        </span>
         <button id="reset-view" class="small" title="Reset the camera">reset</button>
         <button id="size-view" class="small gear" title="Choose the size and resolution of the images this page saves">&#9881;</button>
           <a id="download-view" class="small button" title="Download this view as PNG" download>PNG</a>
@@ -247,17 +258,17 @@
     <div id="place-panel" class="advanced" hidden>
       <span class="row wrap">
         <span class="muted">move in the window</span>
-        <label class="inline">across <input id="pan-x" type="range" min="-100" max="100" value="0">
+        <label class="inline">across <input id="pan-x" type="range" min="-100" max="100" value="0" title="Move the configuration across the window, in fractions of the visible height">
           <span id="pan-x-value" class="muted">0.00</span></label>
-        <label class="inline">up <input id="pan-y" type="range" min="-100" max="100" value="0">
+        <label class="inline">up <input id="pan-y" type="range" min="-100" max="100" value="0" title="Move the configuration up and down the window, in fractions of the visible height">
           <span id="pan-y-value" class="muted">0.00</span></label>
-        <button id="pan-reset" class="small">centre it</button>
+        <button id="pan-reset" class="small" title="Put the configuration back in the middle of the window">centre it</button>
       </span>
       <span class="row wrap">
         <label class="inline" title="The point the view turns about and is centred on, in angstroms">
           origin <input id="origin" type="text" size="16" spellcheck="false" placeholder="middle of the atoms"></label>
         <button id="origin-atom" class="small" title="Use the atom last clicked as the origin">clicked atom</button>
-        <button id="origin-clear" class="small">middle</button>
+        <button id="origin-clear" class="small" title="Turn about the middle of the atoms again">middle</button>
       </span>
       <span class="row wrap">
         <label class="inline" title="Keep the camera where it is instead of refitting it to each frame, so a series does not jump about">
@@ -268,26 +279,26 @@
     <div id="tripod-advanced" class="advanced" hidden>
       <span class="row wrap">
         <label class="inline">labels
-          <select id="tripod-mode">
+          <select id="tripod-mode" title="Which axes the triad shows">
             <option value="sample">RD / TD / ND</option>
             <option value="cell">x / y / z</option>
             <option value="custom">custom</option>
           </select></label>
         <span id="tripod-custom" class="row wrap" hidden>
           <input id="tripod-axis-1" type="text" value="rd" size="5" spellcheck="false" data-vector title="first axis">
-          <input id="tripod-label-1" type="text" placeholder="label" size="5" spellcheck="false">
+          <input id="tripod-label-1" type="text" placeholder="label" size="5" spellcheck="false" title="The name written on the first triad axis">
           <input id="tripod-axis-2" type="text" value="td" size="5" spellcheck="false" data-vector title="second axis">
-          <input id="tripod-label-2" type="text" placeholder="label" size="5" spellcheck="false">
+          <input id="tripod-label-2" type="text" placeholder="label" size="5" spellcheck="false" title="The name written on the second triad axis">
           <input id="tripod-axis-3" type="text" value="nd" size="5" spellcheck="false" data-vector title="third axis">
-          <input id="tripod-label-3" type="text" placeholder="label" size="5" spellcheck="false">
+          <input id="tripod-label-3" type="text" placeholder="label" size="5" spellcheck="false" title="The name written on the third triad axis">
         </span>
       </span>
       <span class="row wrap">
-        <label class="inline">size <input id="tripod-size" type="range" min="3" max="40" value="11">
+        <label class="inline">size <input id="tripod-size" type="range" min="3" max="40" value="11" title="How long the triad arms are, as a fraction of the window">
           <span id="tripod-size-value" class="muted">0.11</span></label>
-        <label class="inline">x <input id="tripod-x" type="range" min="0" max="100" value="7">
+        <label class="inline">x <input id="tripod-x" type="range" min="0" max="100" value="7" title="How far the triad sits from the left edge">
           <span id="tripod-x-value" class="muted">0.07</span></label>
-        <label class="inline">y <input id="tripod-y" type="range" min="0" max="100" value="5">
+        <label class="inline">y <input id="tripod-y" type="range" min="0" max="100" value="5" title="How far the triad sits from the bottom edge">
           <span id="tripod-y-value" class="muted">0.05</span></label>
       </span>
     </div>
@@ -307,8 +318,8 @@
         <span class="row">
           <select id="legend-structure" title="structure of the colour key"></select>
           <button id="size-legend" class="small gear" title="Choose the size and resolution of the images this page saves">&#9881;</button>
-          <a id="download-legend" class="small button" download>PNG</a>
-          <a id="download-legend-svg" class="small button" download>SVG</a>
+          <a id="download-legend" class="small button" download title="Save the colour key as a PNG">PNG</a>
+          <a id="download-legend-svg" class="small button" download title="Save the colour key as an SVG, for a figure that must scale">SVG</a>
         </span>
       </div>
       <div class="figure-box"><img id="legend" class="figure" alt="IPF colour key">
@@ -320,14 +331,14 @@
           <select id="density-cmap" title="colour scale"></select>
           <label class="inline">smooth
             <input id="density-smoothing" type="number" min="0" max="40" step="0.5" value="0"
-                   size="3"></label>
+                   size="3" title="Spread each orientation over this many degrees before counting. A simulated cell is far sharper than a measured texture."></label>
           <span class="muted">&deg;</span>
           <label class="inline" title="Fix the colour scale in MRD. Leave empty to scale the figure to its own peak.">range
             <input id="density-vmin" type="number" step="0.5" size="3" placeholder="min">
             <input id="density-vmax" type="number" step="0.5" size="3" placeholder="max"></label>
           <button id="size-density" class="small gear" title="Choose the size and resolution of the images this page saves">&#9881;</button>
-          <a id="download-density" class="small button" download>PNG</a>
-          <a id="download-density-svg" class="small button" download>SVG</a>
+          <a id="download-density" class="small button" download title="Save the IPF density as a PNG">PNG</a>
+          <a id="download-density-svg" class="small button" download title="Save the IPF density as an SVG, for a figure that must scale">SVG</a>
         </span>
       </div>
       <div class="figure-box"><img id="density" class="figure" alt="IPF orientation density">
@@ -343,8 +354,8 @@
             <input id="pole-up" type="text" value="rd" size="4" spellcheck="false" data-vector></label>
           <label class="inline" title="sample direction drawn at the right of each pole figure">right
             <input id="pole-right" type="text" value="td" size="4" spellcheck="false" data-vector></label>
-          <label class="inline">c/a <input id="c-over-a" type="number" value="1.633" step="0.001"></label>
-          <select id="pole-mode"><option value="density">density</option><option value="scatter">scatter</option></select>
+          <label class="inline">c/a <input id="c-over-a" type="number" value="1.633" step="0.001" title="The c over a ratio, which sets where the hexagonal poles fall"></label>
+          <select id="pole-mode" title="Density draws contours of how many orientations point that way; scatter draws one dot per atom"><option value="density">density</option><option value="scatter">scatter</option></select>
           <select id="pole-structure" title="structure whose orientations are plotted"></select>
           <select id="pole-cmap" title="colour scale"></select>
           <label class="inline" title="Gaussian standard deviation in degrees. A simulated
@@ -357,8 +368,8 @@ texture; a few degrees brings the intensities onto a comparable scale.">smooth
             <input id="pole-vmin" type="number" step="0.5" size="3" placeholder="min">
             <input id="pole-vmax" type="number" step="0.5" size="3" placeholder="max"></label>
           <button id="size-poles" class="small gear" title="Choose the size and resolution of the images this page saves">&#9881;</button>
-          <a id="download-poles" class="small button" download>PNG</a>
-          <a id="download-poles-svg" class="small button" download>SVG</a>
+          <a id="download-poles" class="small button" download title="Save the pole figures as a PNG">PNG</a>
+          <a id="download-poles-svg" class="small button" download title="Save the pole figures as an SVG, for a figure that must scale">SVG</a>
         </span>
       </div>
       <div class="figure-box"><img id="polefig" class="figure" alt="pole figures">
@@ -368,21 +379,21 @@ texture; a few degrees brings the intensities onto a comparable scale.">smooth
       <div class="card-head"><h2>IPF map <span class="muted" title="A flat, EBSD-style section">(flat section)</span></h2>
         <span class="row wrap">
           <label class="inline">view
-            <input id="flat-view" type="text" value="z" size="4" spellcheck="false" data-vector></label>
+            <input id="flat-view" type="text" value="z" size="4" spellcheck="false" data-vector title="The direction the section is seen along. The map is flat, like an EBSD map."></label>
           <label class="inline">slab
-            <input id="flat-slab" type="number" min="1" step="1" value="10" size="4"></label>
+            <input id="flat-slab" type="number" min="1" step="1" value="10" size="4" title="How thick the slab behind the section is, in angstroms"></label>
           <span class="muted">&#8491;</span>
           <label class="inline">pixel
-            <input id="flat-pixel" type="number" min="0.1" step="0.1" value="0.5" size="4"></label>
+            <input id="flat-pixel" type="number" min="0.1" step="0.1" value="0.5" size="4" title="How wide one pixel of the map is, in angstroms. A smaller pixel is slower."></label>
           <label class="inline">boundary
-            <input id="flat-angle" type="number" min="0" step="1" value="5" size="3"></label>
+            <input id="flat-angle" type="number" min="0" step="1" value="5" size="3" title="How many degrees between neighbouring pixels counts as a grain boundary"></label>
           <span class="muted">&deg;</span>
           <label class="inline" title="paint unindexed atoms black instead of filling">
             <input id="flat-raw" type="checkbox"> raw</label>
-          <button id="flat-draw" class="small">draw</button>
+          <button id="flat-draw" class="small" title="Draw the map. It is not redrawn on its own, because a fine pixel takes a while.">draw</button>
           <button id="size-flat" class="small gear" title="Choose the size and resolution of the images this page saves">&#9881;</button>
-          <a id="download-flat" class="small button" download>PNG</a>
-          <a id="download-flat-svg" class="small button" download>SVG</a>
+          <a id="download-flat" class="small button" download title="Save the IPF map as a PNG">PNG</a>
+          <a id="download-flat-svg" class="small button" download title="Save the IPF map as an SVG, for a figure that must scale">SVG</a>
         </span>
       </div>
       <div class="figure-box"><img id="flatmap" class="figure" alt="IPF map">
@@ -400,21 +411,21 @@ texture; a few degrees brings the intensities onto a comparable scale.">smooth
     to a folder under the served root. Movies play at the chosen seconds per frame. A
     selection is not carried across frames.</p>
     <div class="row wrap">
-      <label class="inline">from <select id="series-start"></select></label>
-      <label class="inline">to <select id="series-stop"></select></label>
-      <label class="inline">every <input id="series-step" type="number" min="1" step="1" value="1" size="3"> frame(s)</label>
+      <label class="inline">from <select id="series-start" title="The first frame of the series to render"></select></label>
+      <label class="inline">to <select id="series-stop" title="The last frame of the series to render"></select></label>
+      <label class="inline">every <input id="series-step" type="number" min="1" step="1" value="1" size="3" title="Render every nth frame, to cover a long run quickly"> frame(s)</label>
       <label class="inline">seconds per frame
-        <input id="series-seconds" type="number" min="0.02" step="0.1" value="0.5" size="4"></label>
-      <label class="inline"><input id="series-stamp" type="checkbox" checked> label frames</label>
+        <input id="series-seconds" type="number" min="0.02" step="0.1" value="0.5" size="4" title="How long one frame lasts in the movie, in seconds"></label>
+      <label class="inline"><input id="series-stamp" type="checkbox" checked title="Write the frame name in the corner of each frame"> label frames</label>
       <label class="inline" title="Use the camera as it stands for every frame, instead of fitting it to each one, so the configuration keeps its place through the movie">
         <input id="series-hold-view" type="checkbox" checked> hold the view</label>
     </div>
     <div id="series-outputs" class="series-outputs"></div>
     <div class="row wrap">
-      <label class="inline">output folder <input id="series-outdir" type="text" spellcheck="false" placeholder="name_series"></label>
-      <button id="series-run" class="primary small">Render</button>
-      <button id="series-cancel" class="small" disabled>Cancel</button>
-      <a id="series-zip" class="small button" hidden download>Download all (zip)</a>
+      <label class="inline">output folder <input id="series-outdir" type="text" spellcheck="false" placeholder="name_series" title="The folder the frames and movies are written to, under the folder being served"></label>
+      <button id="series-run" class="primary small" title="Render every frame in the range with the settings above">Render</button>
+      <button id="series-cancel" class="small" disabled title="Stop the render. The frames already written are kept.">Cancel</button>
+      <a id="series-zip" class="small button" hidden download title="Download every file this render wrote, as one zip">Download all (zip)</a>
     </div>
     <progress id="series-progress" max="1" value="0" hidden></progress>
     <div id="series-status" class="muted note"></div>
@@ -431,16 +442,16 @@ texture; a few degrees brings the intensities onto a comparable scale.">smooth
   <div id="size-options"></div>
   <div class="row">
     <label for="size-width">custom width</label>
-    <input id="size-width" type="number" min="100" max="12000" step="10" value="2244">
+    <input id="size-width" type="number" min="100" max="12000" step="10" value="2244" title="The width of a saved image, in pixels">
     <span class="muted">px</span>
     <label for="size-height">height</label>
-    <input id="size-height" type="number" min="100" max="12000" step="10" value="1683">
+    <input id="size-height" type="number" min="100" max="12000" step="10" value="1683" title="The height of a saved 3D view, in pixels. The plots keep their own proportions.">
     <span class="muted">px, the 3D view only</span>
   </div>
   <p id="size-note" class="muted"></p>
   <div class="row">
-    <button id="size-apply" class="primary">Apply</button>
-    <button id="size-close" class="small">Close</button>
+    <button id="size-apply" class="primary" title="Use this size for every image this page saves">Apply</button>
+    <button id="size-close" class="small" title="Close without changing the size">Close</button>
   </div>
 </dialog>
 
@@ -452,18 +463,25 @@ texture; a few degrees brings the intensities onto a comparable scale.">smooth
     the colour map this tool writes for OVITO. It is held in memory for this session
     only and never written to disk.
   </p>
-  <input id="colormap-file" type="file" accept="image/*,.txt,.csv,.dat,.lut,.rgb">
+  <input id="colormap-file" type="file" accept="image/*,.txt,.csv,.dat,.lut,.rgb" title="The image or text file to read the colour scale from">
   <p id="colormap-status" class="muted note"></p>
   <span class="row">
-    <button id="colormap-close" class="small">Close</button>
+    <button id="colormap-close" class="small" title="Close this dialog">Close</button>
   </span>
 </dialog>
 
 <dialog id="browser-dialog">
   <h2>Choose a file</h2>
+  <div class="row wrap" title="The interface serves one folder at a time. Type any folder on this computer here to reach files outside the one it was started in.">
+    <label class="inline">folder
+      <input id="root-path" type="text" size="34" spellcheck="false" placeholder="/home/you/runs"></label>
+    <button id="root-open" class="small">Open</button>
+    <span id="root-places" class="row wrap"></span>
+  </div>
+  <div id="root-error" class="error-text note" hidden></div>
   <div id="browser-path" class="muted"></div>
   <ul id="browser-list"></ul>
-  <button id="browser-close" class="small">Cancel</button>
+  <button id="browser-close" class="small" title="Close without choosing a file">Cancel</button>
 </dialog>
 
 <dialog id="cmd-dialog">
@@ -471,12 +489,12 @@ texture; a few degrees brings the intensities onto a comparable scale.">smooth
   <pre id="cmd-text"></pre>
   <p id="cmd-note" class="muted note" hidden></p>
   <span class="row wrap">
-    <button id="cmd-copy" class="primary small">Copy</button>
+    <button id="cmd-copy" class="primary small" title="Copy the command to the clipboard">Copy</button>
     <button id="cmd-copy-line" class="small"
       title="One line, no backslash continuations, which is what PowerShell and the
 Windows command prompt need">Copy as one line</button>
     <button id="cmd-save" class="small" title="Save the command to a file">Save</button>
-    <button id="cmd-close" class="small">Close</button>
+    <button id="cmd-close" class="small" title="Close this dialog">Close</button>
   </span>
   <details id="cmd-import">
     <summary>Resume from a saved command</summary>
@@ -484,14 +502,14 @@ Windows command prompt need">Copy as one line</button>
     <code>ptmipf</code> command line, and the whole form is set from it. Either form
     works, wrapped or on one line.</p>
     <span class="row wrap">
-      <button id="cmd-load" class="small">Load a file…</button>
-      <input id="cmd-file" type="file" accept=".txt,.sh,.ps1,.cmd,.bat,text/plain" hidden>
+      <button id="cmd-load" class="small" title="Read a command from a file">Load a file…</button>
+      <input id="cmd-file" type="file" accept=".txt,.sh,.ps1,.cmd,.bat,text/plain" hidden title="The file to read the command from">
     </span>
     <textarea id="cmd-input" rows="4" spellcheck="false"
-      placeholder="ptmipf mg.dump --structures hcp --direction nd ..."></textarea>
+      placeholder="ptmipf mg.dump --structures hcp --direction nd ..." title="Paste a ptmipf command here"></textarea>
     <span class="row wrap">
-      <button id="cmd-apply" class="primary small">Apply to the form</button>
-      <label class="inline"><input id="cmd-apply-run" type="checkbox" checked>
+      <button id="cmd-apply" class="primary small" title="Set every control on the page from this command">Apply to the form</button>
+      <label class="inline"><input id="cmd-apply-run" type="checkbox" checked title="Run the analysis as soon as the form is set">
         and analyse</label>
       <span id="cmd-import-status" class="muted"></span>
     </span>

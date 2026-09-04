@@ -949,6 +949,32 @@ def test_a_series_renders_stills_and_a_movie(base, analysed, series_files, rende
     assert _get_json(base, "/api/status")["result"]["path"] == analysed_path
 
 
+def test_the_served_folder_can_be_changed_and_changed_back(base, served_dir):
+    """The folder the interface starts in is a starting point, not a cage."""
+    info = _get_json(base, "/api/root")
+    assert info["root"] == str(served_dir)
+    assert any(place["label"] == "home" for place in info["places"])
+    try:
+        outcome = _post_json(base, "/api/root", {"path": "subdir"})
+        assert outcome["root"] == str(served_dir / "subdir")
+        listing = _get_json(base, "/api/browse")
+        assert listing["at_root"] and listing["entries"] == []
+        # The old folder is now outside the new root, and stays refused.
+        with pytest.raises(urllib.error.HTTPError):
+            _get_json(base, "/api/browse?path=../")
+    finally:
+        _post_json(base, "/api/root", {"path": str(served_dir)})
+    assert _get_json(base, "/api/root")["root"] == str(served_dir)
+
+
+def test_a_folder_that_is_not_there_is_refused(base, served_dir):
+    for path in ("", str(served_dir / "nowhere"), str(served_dir / "crystal.xyz")):
+        with pytest.raises(urllib.error.HTTPError) as excinfo:
+            _post_json(base, "/api/root", {"path": path})
+        assert excinfo.value.code == 400
+    assert _get_json(base, "/api/root")["root"] == str(served_dir)
+
+
 def test_series_output_refuses_paths_outside_its_folder(base, analysed):
     for name in ("../crystal.xyz", "/etc/passwd", "nope.png"):
         with pytest.raises(urllib.error.HTTPError) as excinfo:

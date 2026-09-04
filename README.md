@@ -42,46 +42,101 @@ the proper IPF colour keys but work on EBSD maps, not on atoms.
 
 ## Install
 
-With [uv](https://docs.astral.sh/uv/) (recommended; installs the whole environment in
-seconds):
+### Linux and macOS
+
+These steps are for Linux and macOS. Windows is a separate section below, because
+PowerShell needs the steps one per line. Each block is one command, so the copy
+button on the right of the block copies exactly what you paste.
+
+With [uv](https://docs.astral.sh/uv/), recommended: it installs the whole environment
+in seconds. Make the environment:
 
 ```bash
-uv venv && uv pip install git+https://github.com/Carbonpoint/ptm-ipf.git
+uv venv
 ```
 
-or with pip:
+Install ptm-ipf into it:
+
+```bash
+uv pip install git+https://github.com/Carbonpoint/ptm-ipf.git
+```
+
+Or, with pip instead of uv:
 
 ```bash
 pip install git+https://github.com/Carbonpoint/ptm-ipf.git
 ```
 
-Both forms need Git on the PATH, because they fetch the repository: `winget install
-Git.Git` on Windows, `sudo apt install git` on Linux. Without Git, download the
-repository as a ZIP and run `uv pip install .` in the unpacked folder.
-`ptmipf-ui --check` reports whether Git was found, along with everything else.
+Both forms fetch the repository, so Git must be on the PATH:
 
-On a bare Linux machine OVITO also needs the OpenGL runtime:
-`sudo apt install libopengl0 libegl1`. Without root, a symlink works:
-`ln -s /usr/lib/x86_64-linux-gnu/libGL.so.1 <somewhere>/libOpenGL.so.0` and run with
-`LD_LIBRARY_PATH=<somewhere>`.
+```bash
+sudo apt install git
+```
+
+Without Git, download the repository as a ZIP and run `uv pip install .` in the
+unpacked folder. On a bare Linux machine OVITO also needs the OpenGL runtime:
+
+```bash
+sudo apt install libopengl0 libegl1
+```
+
+Without root, a symlink works instead: `ln -s /usr/lib/x86_64-linux-gnu/libGL.so.1
+<somewhere>/libOpenGL.so.0`, then run with `LD_LIBRARY_PATH=<somewhere>`.
+
+Check the installation, which also reports whether Git was found:
+
+```bash
+ptmipf-ui --check
+```
 
 ### Windows
 
-Windows PowerShell has no `&&`, so the one-line form above fails there. Run the steps
-as separate lines instead:
+PowerShell has no `&&`, so every step is its own command. Run them in the folder you
+want the environment in.
+
+If Git is missing, install it first. `git+https://...` cannot fetch the repository
+without it:
+
+```powershell
+winget install Git.Git
+```
+
+Make the environment:
 
 ```powershell
 uv venv
+```
+
+Install ptm-ipf into it:
+
+```powershell
 uv pip install git+https://github.com/Carbonpoint/ptm-ipf.git
+```
+
+Self test: it reports whether Git, OVITO and the 3D view are working, and names what
+is missing if not:
+
+```powershell
 .venv\Scripts\ptmipf-ui.exe --check
 ```
 
-The last line is a self test: it reports whether OVITO imported and whether the 3D
-view can be drawn, and names what is missing if not. Then:
+Start the interface in the current folder. It opens in your browser, and you can
+point it at another folder from inside it:
+
+```powershell
+.venv\Scripts\ptmipf-ui.exe
+```
+
+Or start it on one file:
+
+```powershell
+.venv\Scripts\ptmipf-ui.exe mg.dump
+```
+
+The command line tool works the same way:
 
 ```powershell
 .venv\Scripts\ptmipf.exe mg.dump --structures hcp --direction z --legend key.png
-.venv\Scripts\ptmipf-ui.exe mg.dump
 ```
 
 Calling the executables in `.venv\Scripts` directly avoids activating the environment,
@@ -89,31 +144,32 @@ which PowerShell refuses to do under its default execution policy. To activate a
 run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass` and then
 `.venv\Scripts\Activate.ps1`.
 
-In `cmd.exe` the chained form does work:
-
-```bat
-uv venv && uv pip install git+https://github.com/Carbonpoint/ptm-ipf.git
-```
-
-Two Windows specifics. `git+https://...` needs Git for Windows on the PATH
-(`winget install Git.Git`); without it, download the repository as a ZIP and run
-`uv pip install .` in the unpacked folder. And OVITO's Windows wheels carry their own
-graphics stack, so there is no OpenGL step to do by hand.
+OVITO's Windows wheels carry their own graphics stack, so there is no OpenGL step to
+do by hand.
 
 ### For development
 
+Clone the repository:
+
 ```bash
-git clone https://github.com/Carbonpoint/ptm-ipf.git && cd ptm-ipf
-uv venv && uv pip install -e ".[test]" && uv run --no-project pytest -q
+git clone https://github.com/Carbonpoint/ptm-ipf.git
 ```
 
-On Windows, again one step per line:
+Then, in the `ptm-ipf` folder, make the environment:
 
-```powershell
-git clone https://github.com/Carbonpoint/ptm-ipf.git
-cd ptm-ipf
+```bash
 uv venv
+```
+
+Install it in place, with the test extras:
+
+```bash
 uv pip install -e ".[test]"
+```
+
+Run the tests:
+
+```bash
 uv run --no-project pytest -q
 ```
 
@@ -611,7 +667,10 @@ process, so a long run can be stopped outright and started again from scratch. A
 stepped through with arrows, and the *Render series* card writes stills or a GIF/MP4 of
 any of the views for a range of frames. The *CLI command* button prints the `ptmipf`
 command line that reproduces the session, so exploration turns straight into a scriptable
-analysis. See [docs/webui.md](docs/webui.md) for the full tour.
+analysis, and *Save session* writes the whole state of the page, camera and slices
+included, to a file that puts it all back later. The file browser opens any folder on
+the machine, not only the one the server was started in, and every control carries a
+tooltip. See [docs/webui.md](docs/webui.md) for the full tour.
 
 ## Showcase
 

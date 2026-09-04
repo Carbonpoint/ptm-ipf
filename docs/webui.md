@@ -76,6 +76,11 @@ header):
   it (in angstroms along the normal) and applies, when *figures too* is
   ticked, to the pole figures, the IPF density and the IPF map as well as to
   the view, so all four show the same atoms.
+* **Camera angles as numbers**: beside the view are *az*, *el* and *zoom*
+  boxes. Dragging fills them in, and typing in them moves the camera, so a
+  view can be written down, put in a caption, and matched exactly later or on
+  another configuration. Azimuth turns about the vertical, elevation lifts
+  above the horizon, and both are in degrees.
 * **Several slices at once**: *+ slice* adds another, each with its own
   normal, position and thickness. *Keep any slice* shows the atoms in any of
   them, which is how two sections of one configuration are compared side by
@@ -181,6 +186,23 @@ header):
   plausible looking but wrong one, so they are asked rather than guessed. A
   structure type column is read with OVITO's own PTM codes; without one, every
   atom carrying an orientation is taken as a single named phase.
+* **Any folder on the machine**: the interface serves one folder at a time,
+  the one it was started in. The *folder* box at the top of the file browser
+  opens any other folder on the computer, with buttons for the home folder,
+  the folder the server was started in, and on Windows the drives. Every path
+  the interface accepts is then read against the new folder. The server is
+  bound to the loopback address and runs as your own account, so a folder is
+  only checked for being a folder.
+* **Save and load a session**: *Save session* writes every control on the
+  page to a small JSON file: the file and frame, the structures, the sample
+  frame, the rotations, the slices, the camera, the figure settings and
+  ranges, the selection criteria, the saved image size, the series settings
+  and the folder being served. *Load session* reads one back, puts every
+  control where it was, opens the folder again, and runs the analysis. The
+  command line cannot express all of this (the camera, the slices and the
+  sizes have no flags), which is why the session file exists beside it.
+* **Help on every control**: every box, button and menu carries a tooltip
+  saying what it does. The *Help* link in the header opens this page.
 * **Reproducibility**: the *CLI command* button prints the `ptmipf` command
   line, selection flags included, that reproduces the current session, so
   interactive exploration turns directly into a scriptable analysis. It can be

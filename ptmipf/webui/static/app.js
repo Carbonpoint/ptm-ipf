@@ -17,6 +17,8 @@ const state = {
   running: false,
   selectionCount: null,
   criteria: [],
+  root: "",             // the folder the server is serving, shown in the browser
+  restoring: false,     // true while a saved session is being put back
   atomInfo: null,
   command: null,       // last /api/command payload, for the one-line copy
   columns: null,       // the file's columns and the mapping controls built from them
@@ -284,6 +286,7 @@ function exportDirections() {
 /* analysis + status polling                                          */
 /* ------------------------------------------------------------------ */
 async function runAnalysis(full, slab, force) {
+  if (state.restoring) return;
   let analysis;
   if (full || !state.analysed) {
     analysis = analysisParams();
@@ -966,6 +969,7 @@ function flatMapQuery(extra) {
 }
 
 async function refreshFlatMap() {
+  if (state.restoring) return;
   if (state.generation < 0) return;
   const info = $("flat-info");
   info.textContent = "drawing...";
@@ -992,7 +996,39 @@ async function refreshFlatMap() {
   }
 }
 
+/* The camera angles are also boxes, so a view can be written down, typed back
+ * in, and matched exactly.  Every path that moves the camera ends in
+ * refreshView, so the boxes are brought up to date there, except the one the
+ * user is typing in. */
+function syncCameraBoxes() {
+  const values = { "cam-az": state.camera.az, "cam-el": state.camera.el,
+                   "cam-zoom": state.camera.zoom };
+  for (const [id, value] of Object.entries(values)) {
+    const box = $(id);
+    if (box === document.activeElement) continue;
+    box.value = id === "cam-zoom" ? value.toFixed(2) : value.toFixed(1);
+  }
+}
+
+function bindCameraBoxes() {
+  const limits = { "cam-az": null, "cam-el": [-89, 89], "cam-zoom": [0.1, 40] };
+  for (const [id, limit] of Object.entries(limits)) {
+    $(id).addEventListener("change", () => {
+      let value = parseFloat($(id).value);
+      if (!isFinite(value)) { syncCameraBoxes(); return; }
+      if (limit) value = Math.max(limit[0], Math.min(limit[1], value));
+      if (id === "cam-az") state.camera.az = value;
+      else if (id === "cam-el") state.camera.el = value;
+      else state.camera.zoom = value;
+      refreshView();
+    });
+  }
+  syncCameraBoxes();
+}
+
 async function refreshView() {
+  syncCameraBoxes();
+  if (state.restoring) return;
   if (state.generation < 0) return;
   if (renderInFlight) { renderQueued = true; return; }
   renderInFlight = true;
@@ -1084,6 +1120,7 @@ function bindViewer() {
     state.camera = { az: -125, el: 20, zoom: 1.0 };
     refreshView();
   });
+  bindCameraBoxes();
 }
 
 async function pickAtom(event) {
@@ -1306,6 +1343,7 @@ function setDownloads(prefix, url) {
 }
 
 function refreshFigures() {
+  if (state.restoring) return;
   if (state.generation < 0) return;
   const legend = "/api/figure/legend?" + legendQuery();
   setDownloads("download-legend", legend);
@@ -1505,6 +1543,136 @@ function updateSelectionCount() {
 }
 
 /* ------------------------------------------------------------------ */
+/* saving and reopening a session                                     */
+/* ------------------------------------------------------------------ */
+/* The command line says what to compute, not what the page looks like: the
+ * camera, the slices, the sizes, the ranges and the series settings have no
+ * flags.  A session file carries the lot, so a piece of work can be put down
+ * and picked up exactly where it was. */
+const SESSION_FORMAT = 1;
+
+/* The selection criteria are rows built by hand, with no ids on their boxes,
+ * so they are saved as the values in each row, in the order the row builds
+ * them, and put back the same way. */
+function criteriaSnapshot() {
+  const rows = [];
+  for (const box of document.querySelectorAll("#criteria .criterion")) {
+    const values = [...box.querySelectorAll("input, select")].map((el) => {
+      if (el.type === "checkbox" || el.type === "radio") return el.checked;
+      if (el.multiple) return [...el.selectedOptions].map((option) => option.value);
+      return el.value;
+    });
+    rows.push({ kind: box.dataset.kind, values });
+  }
+  return rows;
+}
+
+function restoreCriteria(rows) {
+  $("criteria").replaceChildren();
+  for (const row of rows || []) {
+    if (!CRITERION_LABELS[row.kind]) continue;
+    addCriterion(row.kind);
+    const box = $("criteria").lastElementChild;
+    const fields = [...box.querySelectorAll("input, select")];
+    row.values.forEach((value, i) => {
+      const el = fields[i];
+      if (!el) return;
+      if (el.type === "checkbox" || el.type === "radio") el.checked = !!value;
+      else if (el.multiple) {
+        for (const option of el.options) option.selected = (value || []).includes(option.value);
+      } else el.value = value;
+    });
+  }
+}
+
+function sessionSnapshot() {
+  const controls = {};
+  for (const box of document.querySelectorAll("input[id], select[id], textarea[id]")) {
+    if (box.type === "file" || box.type === "button") continue;
+    controls[box.id] = box.type === "checkbox" || box.type === "radio" ? box.checked : box.value;
+  }
+  const sections = {};
+  for (const part of document.querySelectorAll("details[id]")) sections[part.id] = part.open;
+  return {
+    ptmipf_session: SESSION_FORMAT,
+    version: (state.meta && state.meta.version) || "",
+    saved: new Date().toISOString(),
+    root: state.root || "",
+    path: $("path").value,
+    controls,
+    slices: extraSlices(),
+    camera: { ...state.camera },
+    criteria: criteriaSnapshot(),
+    sections,
+  };
+}
+
+function saveSession() {
+  const data = sessionSnapshot();
+  const stem = ($("path").value.split(/[\\/]/).pop() || "ptmipf").replace(/\.[^.]*$/, "");
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `${stem}_session.json`;
+  link.click();
+  URL.revokeObjectURL(link.href);
+  setStatus(`session saved as ${link.download}`, "");
+}
+
+async function applySession(data) {
+  if (!data || !data.ptmipf_session) throw new Error("this is not a ptm-ipf session file");
+  // Nothing is computed while the controls are being put back: every change
+  // handler still runs, so the page arranges itself, but the analysis, the
+  // view and the figures wait for one pass at the end.
+  state.restoring = true;
+  try {
+    if (data.root) {
+      try { await postJSON("/api/root", { path: data.root }); }
+      catch (error) { setStatus("the saved folder could not be opened: " + error.message, "error"); }
+    }
+    for (const row of document.querySelectorAll("#slice-list .slice-row")) row.remove();
+    for (const spec of data.slices || []) addSliceRow(spec);
+    for (const [id, value] of Object.entries(data.controls || {})) {
+      const box = $(id);
+      if (!box) continue;  // a control from an older or newer version
+      if (box.type === "checkbox" || box.type === "radio") box.checked = !!value;
+      else box.value = value;
+      box.dispatchEvent(new Event("change", { bubbles: true }));
+      box.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    for (const [id, open] of Object.entries(data.sections || {})) {
+      if ($(id)) $(id).open = open;
+    }
+    if (data.camera) state.camera = { ...state.camera, ...data.camera };
+    if (data.criteria) restoreCriteria(data.criteria);
+  } finally {
+    state.restoring = false;
+  }
+  syncCameraBoxes();
+  syncAnalyseSlice();
+  if ($("path").value) {
+    await detectSeries($("path").value);
+    await runAnalysis(true);
+  }
+  setStatus("session restored", "");
+}
+
+function bindSession() {
+  $("session-save").addEventListener("click", saveSession);
+  $("session-load").addEventListener("click", () => $("session-file").click());
+  $("session-file").addEventListener("change", async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+    try {
+      await applySession(JSON.parse(await file.text()));
+    } catch (error) {
+      setStatus("that session file could not be read: " + error.message, "error");
+    }
+    event.target.value = "";
+  });
+}
+
+/* ------------------------------------------------------------------ */
 /* file browser                                                       */
 /* ------------------------------------------------------------------ */
 async function openBrowser(path) {
@@ -1541,9 +1709,54 @@ async function openBrowser(path) {
     }
     $("browser-list").replaceChildren(...items);
     if (!dialog.open) dialog.showModal();
+    showRoot();
   } catch (error) {
     setStatus(error.message, "error");
   }
+}
+
+/* The interface serves one folder at a time.  Being able to change it from
+ * here means the folder it was started in is a starting point, not a cage. */
+async function showRoot() {
+  try {
+    const info = await api("/api/root");
+    state.root = info.root;
+    $("root-path").value = info.root;
+    const places = (info.places || []).map((place) => {
+      const button = document.createElement("button");
+      button.className = "small ghost";
+      button.textContent = place.label;
+      button.title = place.path;
+      button.addEventListener("click", () => openRoot(place.path));
+      return button;
+    });
+    $("root-places").replaceChildren(...places);
+  } catch (error) {
+    /* The dialog still works on the folder it has. */
+  }
+}
+
+async function openRoot(path) {
+  const note = $("root-error");
+  try {
+    const info = await postJSON("/api/root", { path });
+    note.hidden = true;
+    state.root = info.root;
+    $("root-path").value = info.root;
+    // The typed path in the main form belongs to the old folder.
+    $("path").value = "";
+    await openBrowser("");
+  } catch (error) {
+    note.textContent = error.message;
+    note.hidden = false;
+  }
+}
+
+function bindRoot() {
+  $("root-open").addEventListener("click", () => openRoot($("root-path").value.trim()));
+  $("root-path").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); openRoot($("root-path").value.trim()); }
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -1811,7 +2024,10 @@ function renderSeries() {
 
 function gotoSeriesItem(index) {
   const series = state.series;
-  if (!series || index < 0 || index >= series.items.length) return;
+  // NaN passes every comparison, so it is refused by name: an empty select
+  // reaches here while a saved session is being put back.
+  if (!series || !Number.isInteger(index)) return;
+  if (index < 0 || index >= series.items.length) return;
   const item = series.items[index];
   if (series.kind === "files") $("path").value = item.path;
   $("frame-index").value = item.frame_index;
@@ -2212,6 +2428,8 @@ async function init() {
   });
   $("browse").addEventListener("click", () => openBrowser(""));
   $("browser-close").addEventListener("click", () => $("browser-dialog").close());
+  bindRoot();
+  bindSession();
   $("path").addEventListener("keydown", (e) => { if (e.key === "Enter") runAnalysis(true); });
 
   for (const id of ["direction", "axis-rd", "axis-td", "axis-nd", "axis-ed"]) {
@@ -2321,6 +2539,8 @@ async function init() {
   syncAnalyseSlice();
   checkEnvironment();
   // Pick up an analysis, or a series render, that survived a page reload.
+  // Which folder is being served, for the session file and the browser dialog.
+  try { state.root = (await api("/api/root")).root; } catch (error) { /* not fatal */ }
   const status = await api("/api/status");
   // The rows were built before the server was asked which movie formats it
   // can write, so build them again now that the answer is here.

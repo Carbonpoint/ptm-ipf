@@ -442,6 +442,43 @@ class AppState:
     # ------------------------------------------------------------------
     # paths
     # ------------------------------------------------------------------
+    def set_root(self, path: str) -> dict:
+        """Serve a different folder, so any folder on the machine is reachable.
+
+        The interface starts in one folder, which is rarely the only one worth
+        looking at.  The server is bound to the loopback address and is the
+        person's own account, so the new folder is only checked for being a
+        folder, not for where it is.
+        """
+        candidate = Path(path).expanduser()
+        if not candidate.is_absolute():
+            candidate = self.root / candidate
+        candidate = candidate.resolve()
+        if not candidate.is_dir():
+            raise ValueError(f"not a folder: {path}")
+        with self.lock:
+            self.root = candidate
+        return {"root": str(candidate)}
+
+    def home_folders(self) -> list[dict]:
+        """Somewhere to start from when the typed path is a guess."""
+        import platform
+
+        places = [("home", Path.home()), ("here", Path.cwd())]
+        if platform.system() == "Windows":  # pragma: no cover - not run on Linux
+            places += [
+                (f"{letter}:", Path(f"{letter}:/"))
+                for letter in "CDEFG"
+                if Path(f"{letter}:/").is_dir()
+            ]
+        seen, out = set(), []
+        for label, place in places:
+            text = str(place)
+            if place.is_dir() and text not in seen:
+                seen.add(text)
+                out.append({"label": label, "path": text})
+        return out
+
     def resolve(self, path: str) -> Path:
         """Resolve *path* against the served root, refusing escapes."""
         candidate = (self.root / path).resolve() if not Path(path).is_absolute() else (

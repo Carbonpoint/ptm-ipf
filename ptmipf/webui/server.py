@@ -592,6 +592,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/meta": self._get_meta,
             "/api/status": self._get_status,
             "/api/browse": self._get_browse,
+            "/api/root": self._get_root,
             "/api/render": self._get_render,
             "/api/figure/legend": self._get_legend,
             "/api/figure/poles": self._get_poles,
@@ -682,6 +683,22 @@ class Handler(BaseHTTPRequestHandler):
                 entries.append({"name": entry.name, "dir": False, "size": entry.stat().st_size})
         relative = "" if directory == state.root else str(directory.relative_to(state.root))
         self._json({"path": relative, "at_root": directory == state.root, "entries": entries})
+
+    def _get_root(self, query):
+        """The folder being served, and a few to start from."""
+        self._json({"root": str(self.state.root), "places": self.state.home_folders()})
+
+    def _post_root(self):
+        """Serve a different folder, so the interface is not tied to where it started."""
+        body = self._body()
+        path = str(body.get("path", "")).strip()
+        if not path:
+            raise ApiError("say which folder to open")
+        try:
+            payload = self.state.set_root(path)
+        except ValueError as exc:
+            raise ApiError(str(exc)) from exc
+        self._json(payload)
 
     # -- images -------------------------------------------------------
     def _result_or_409(self, query=None):
@@ -1084,6 +1101,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/series/render": self._post_series_render,
             "/api/series/cancel": self._post_series_cancel,
             "/api/cancel": self._post_cancel,
+            "/api/root": self._post_root,
         }
         if url.path in routes:
             self._dispatch(routes[url.path])
