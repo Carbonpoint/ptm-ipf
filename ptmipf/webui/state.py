@@ -1063,7 +1063,28 @@ def _movie_check() -> tuple[bool, str]:
 
 def _explain_ovito(exc: Exception) -> str:
     """Turn the usual OVITO import failures into the fix for them."""
+    import sys
+
     text = str(exc)
+    if "DLL load failed" in text:
+        # OVITO's bindings are built against one Qt.  Version 3.16 pins
+        # PySide6~=6.10.3; 3.15.5 accepts any PySide6 and then will not load
+        # against a newer one.  There is no 3.16 wheel for Python 3.14 on
+        # Windows, so pip and uv fall back to 3.15.5 and the pair breaks.
+        detail = f"{text}. OVITO could not load its own libraries."
+        if sys.version_info >= (3, 14):
+            return (
+                f"{detail} This Python is {sys.version_info.major}."
+                f"{sys.version_info.minor}, which has no OVITO 3.16 build on "
+                "Windows, so an older OVITO was installed against a Qt it "
+                "cannot use. Make the environment with Python 3.13 instead: "
+                "uv venv --python 3.13 --clear, then install again."
+            )
+        return (
+            f"{detail} Check that PySide6 matches what this OVITO asks for "
+            "(uv pip install --reinstall ovito), and that the Microsoft Visual "
+            "C++ runtime is installed."
+        )
     if "libOpenGL" in text or "libEGL" in text:
         return (
             f"{text}. On Linux install the OpenGL runtime "

@@ -305,3 +305,17 @@ broken image, and `ptmipf-ui --check` reports the same probe on the terminal:
 which of OVITO, matplotlib, Pillow and the selection module imported, and
 whether a test scene rendered and with which renderer. The plots, the flat
 orientation map and the exports need no renderer and keep working without one.
+
+On Windows, `DLL load failed while importing ovito_bindings` means OVITO cannot
+load its own libraries. OVITO builds its bindings against one Qt: version 3.16
+pins `PySide6~=6.10.3`, while 3.15.5 accepts any PySide6 and then will not load
+against a newer one. There is no OVITO 3.16 build for Python 3.14 on Windows, so
+a Python 3.14 environment gets 3.15.5 and a Qt it cannot use. Make the
+environment with Python 3.13 instead:
+
+```powershell
+uv venv --python 3.13 --clear
+uv pip install git+https://github.com/Carbonpoint/ptm-ipf.git
+```
+
+`ptmipf-ui --check` says this in place of the raw error.

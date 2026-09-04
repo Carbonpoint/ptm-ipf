@@ -78,3 +78,34 @@ def test_the_environment_check_finds_git_when_it_is_there(monkeypatch):
 
     monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/git")
     assert state._git_check() == (True, "/usr/bin/git")
+
+
+def _version(major, minor):
+    """A stand-in for sys.version_info that answers .major and .minor too."""
+    import collections
+
+    fields = collections.namedtuple(
+        "version_info", "major minor micro releaselevel serial"
+    )
+    return fields(major, minor, 0, "final", 0)
+
+
+def test_a_windows_dll_failure_names_the_python_version_as_the_cause(monkeypatch):
+    """OVITO 3.16 has no Windows build for Python 3.14, and 3.15.5 breaks there."""
+    from ptmipf.webui import state
+
+    monkeypatch.setattr("sys.version_info", _version(3, 14))
+    message = state._explain_ovito(
+        ImportError("DLL load failed while importing ovito_bindings: "
+                    "The specified module could not be found.")
+    )
+    assert "Python 3.13" in message
+    assert "uv venv --python 3.13" in message
+
+
+def test_a_dll_failure_on_a_supported_python_talks_about_qt(monkeypatch):
+    from ptmipf.webui import state
+
+    monkeypatch.setattr("sys.version_info", _version(3, 13))
+    message = state._explain_ovito(ImportError("DLL load failed while importing x"))
+    assert "PySide6" in message and "3.13" not in message

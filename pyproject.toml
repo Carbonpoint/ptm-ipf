@@ -26,7 +26,13 @@ dependencies = [
     "numpy>=1.22",
     "scipy>=1.8",
     "matplotlib>=3.5",
-    "ovito>=3.7",
+    # OVITO's compiled bindings are built against one Qt: 3.16 pins
+    # PySide6~=6.10.3, but 3.15.5 accepts any PySide6>=6.8.3 and then fails to
+    # load against a newer one.  There is no 3.16 wheel for Python 3.14 on
+    # Windows, so that combination is refused here rather than installed and
+    # found broken later.
+    "ovito>=3.7; python_version < '3.14'",
+    "ovito>=3.16; python_version >= '3.14'",
 ]
 
 [project.optional-dependencies]
