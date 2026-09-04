@@ -16,9 +16,12 @@ import pytest
 
 pytest.importorskip("ovito")
 
-#: The sizes the interface itself can ask for: the screen, a 1080p export and
-#: the widest export it allows.
-SIZES = [(320, 240), (1920, 1080), (3840, 2160), (12000, 64)]
+#: The sizes the interface itself can ask for: the screen, a 1080p export, a
+#: 4K one, and the widest view the server will render.  Anything wider is
+#: clamped there, because macOS aborts on a texture past the device limit.
+from ptmipf.webui.rendering import MAX_VIEW_PX  # noqa: E402
+
+SIZES = [(320, 240), (1920, 1080), (3840, 2160), (MAX_VIEW_PX, 64)]
 
 PROBE = """
 import sys

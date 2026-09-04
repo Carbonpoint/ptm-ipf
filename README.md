@@ -102,8 +102,8 @@ winget install Git.Git
 ```
 
 Make the environment. Use Python 3.13 on Windows. OVITO has no 3.16 build for Python
-3.14 there, so 3.14 gets OVITO 3.15.5, which is held to the same Qt but is not the
-version this is tested against. Python 3.13 is:
+3.14 there, and the older OVITO that 3.14 gets crashes when it draws, so the 3D view
+switches itself off on that combination. Everything else keeps working. Python 3.13 is:
 
 ```powershell
 uv venv --python 3.13 --clear

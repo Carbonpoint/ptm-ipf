@@ -163,6 +163,16 @@ def visible_mask(
     return visible
 
 
+#: The largest 3D view any renderer here is asked for, per side.
+#
+# The picture is drawn into a graphics texture, and a texture wider than the
+# device allows is not an error that can be caught: macOS Metal fails an
+# assertion and the process is gone, taking the server with it.  8192 is the
+# smallest maximum in common use, so it is the one to stay inside.  The plots
+# are drawn by matplotlib and are not affected.
+MAX_VIEW_PX = 8192
+
+
 def render_scene(
     result,
     filename,
@@ -209,6 +219,11 @@ def render_scene(
     it, because losing the view over a decoration helps nobody.
     """
     warnings = [] if warnings is None else warnings
+    from ..render import renderer_refusal
+
+    refusal = renderer_refusal()
+    if refusal:
+        raise RuntimeError(refusal)
     from ovito.data import DataCollection, Particles, SimulationCell
     from ovito.pipeline import Pipeline, StaticSource
     from ovito.vis import Viewport

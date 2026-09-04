@@ -13,7 +13,39 @@ from .analysis import DEFAULT_OTHER_COLOR, ipf_color_modifier
 from .frames import SampleFrame
 from .structures import DEFAULT_STRUCTURES, get_structure
 
-__all__ = ["render_ipf", "render_result", "TRIPOD_MARGIN"]
+__all__ = ["render_ipf", "render_result", "renderer_refusal", "TRIPOD_MARGIN"]
+
+
+def renderer_refusal() -> str:
+    """Why drawing must not even be attempted here, or "" when it is safe.
+
+    A renderer that fails raises, and that is handled everywhere.  A renderer
+    that crashes takes the process with it, so a combination known to crash
+    has to be refused before it is asked, not after.  OVITO 3.15.5 on Windows
+    and Python 3.14 raises an access violation on its first render; there is
+    no OVITO 3.16 build for that Python on Windows, so the answer is Python
+    3.13.  Everything that does not need a renderer keeps working.
+    """
+    import platform
+    import sys
+
+    if platform.system() != "Windows" or sys.version_info < (3, 14):
+        return ""
+    try:
+        from importlib.metadata import version
+
+        from packaging.version import Version
+
+        if Version(version("ovito")) >= Version("3.16"):
+            return ""
+    except Exception:  # pragma: no cover - depends on the installed packages
+        return ""
+    return (
+        "the 3D view is switched off: OVITO before 3.16 crashes when it draws "
+        "on Windows with Python 3.14, and OVITO 3.16 has no build for that "
+        "Python. Make the environment with Python 3.13 for the 3D view. The "
+        "plots, the IPF map and the exports do not need it."
+    )
 
 #: Framing used for a triad when the corner is already clear.
 TRIPOD_MARGIN = 1.15
@@ -63,6 +95,9 @@ def render_ipf(
     str
         The filename written.
     """
+    refusal = renderer_refusal()
+    if refusal:
+        raise RuntimeError(refusal)
     from ovito.io import import_file
     from ovito.modifiers import (
         DeleteSelectedModifier,
@@ -280,6 +315,9 @@ def render_result(
     str
         The filename written.
     """
+    refusal = renderer_refusal()
+    if refusal:
+        raise RuntimeError(refusal)
     from ovito.data import DataCollection
     from ovito.pipeline import Pipeline, StaticSource
     from ovito.vis import Viewport

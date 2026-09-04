@@ -311,9 +311,11 @@ On Windows, `DLL load failed while importing ovito_bindings` means OVITO cannot
 load its own libraries. OVITO builds its bindings against one Qt: version 3.16
 pins `PySide6~=6.10.3`, while 3.15.5 accepts any PySide6 and then will not load
 against a newer one. There is no OVITO 3.16 build for Python 3.14 on Windows,
-so a Python 3.14 environment gets 3.15.5. The install holds PySide6 to the
-6.10 series there for that reason, but Python 3.13 is the version this is
-tested on. Make the environment with it:
+so a Python 3.14 environment gets 3.15.5. That version crashes on its first
+render there, with an access violation rather than an error, so the 3D view
+refuses to draw on that combination instead of taking the server down with
+it: `--check` says so, and the plots, the IPF map and the exports carry on.
+Python 3.13 is the version to use on Windows. Make the environment with it:
 
 ```powershell
 uv venv --python 3.13 --clear

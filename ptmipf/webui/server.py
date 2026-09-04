@@ -474,10 +474,11 @@ def view_options(state: AppState, result, query: dict) -> dict:
         "elevation": _number(query, "el", 20.0),
         "zoom": _number(query, "zoom", 1.0),
         # Clamped: an export dialog can ask for 4K, a typo can ask for more
-        # than the machine has memory for.
+        # than the graphics device can hold, which is fatal rather than an
+        # error; see rendering.MAX_VIEW_PX.
         "size": (
-            int(min(max(_number(query, "w", 900), 32), figures.MAX_WIDTH_PX)),
-            int(min(max(_number(query, "h", 700), 32), figures.MAX_WIDTH_PX)),
+            int(min(max(_number(query, "w", 900), 32), rendering.MAX_VIEW_PX)),
+            int(min(max(_number(query, "h", 700), 32), rendering.MAX_VIEW_PX)),
         ),
         "hide_other": _flag(query, "hide_other"),
         "tripod": _flag(query, "tripod"),

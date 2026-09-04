@@ -172,3 +172,28 @@ def test_the_qt_check_accepts_the_package_that_is_really_installed(monkeypatch):
     monkeypatch.setattr(metadata, "requires", lambda name: ["PySide6~=6.10.3"])
     monkeypatch.setattr(metadata, "version", version)
     assert state._qt_pairing_check() == (True, "PySide6 6.10.3")
+
+
+def test_a_renderer_known_to_crash_is_refused_rather_than_asked(monkeypatch):
+    """A raised error is survivable; an access violation takes the server with it."""
+    from ptmipf import render
+
+    monkeypatch.setattr("platform.system", lambda: "Windows")
+    monkeypatch.setattr("sys.version_info", _version(3, 14))
+    monkeypatch.setattr("importlib.metadata.version", lambda name: "3.15.5")
+    refusal = render.renderer_refusal()
+    assert "Python 3.13" in refusal
+    with pytest.raises(RuntimeError, match="3D view is switched off"):
+        render.render_result(object(), "nowhere.png")
+
+
+def test_the_renderer_is_not_refused_where_it_works(monkeypatch):
+    from ptmipf import render
+
+    monkeypatch.setattr("platform.system", lambda: "Windows")
+    monkeypatch.setattr("sys.version_info", _version(3, 14))
+    monkeypatch.setattr("importlib.metadata.version", lambda name: "3.16.0")
+    assert render.renderer_refusal() == ""
+    monkeypatch.setattr("platform.system", lambda: "Linux")
+    monkeypatch.setattr("importlib.metadata.version", lambda name: "3.15.5")
+    assert render.renderer_refusal() == ""

@@ -34,6 +34,10 @@ def _renderer_available() -> bool:
                 type_codes = {"fcc": 1}
                 cell = None
 
+            from ptmipf.render import renderer_refusal
+
+            if renderer_refusal():
+                raise RuntimeError("this combination must not be asked to draw")
             with tempfile.NamedTemporaryFile(suffix=".png") as handle:
                 render_result(_Probe(), handle.name, size=(32, 32))
             _RENDERER_STATE["ok"] = True
