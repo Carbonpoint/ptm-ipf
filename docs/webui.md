@@ -145,7 +145,12 @@ header):
   figure printed at the width it was asked for has exactly that resolution.
   What is shown on screen stays at screen size, so the page keeps up, and the
   setting is remembered in the browser and used by a series render too. SVG
-  is vector and ignores it.
+  is vector and ignores it. The 3D view has one further limit: it is drawn
+  into a graphics texture, and a texture past what the device allows is fatal
+  rather than an error, so the first time a large view is asked for the
+  machine is measured (in a child process, once) and the view is clamped to
+  what it can actually draw. The plots are drawn by matplotlib and are not
+  affected.
 * **Selections**: build up a selection from structure, particle type, RMSD
   range, spatial slab, orientation within a tolerance of a sample direction
   ("the basal-oriented grains"), or misorientation from a reference

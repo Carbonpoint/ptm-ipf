@@ -163,14 +163,30 @@ def visible_mask(
     return visible
 
 
-#: The largest 3D view any renderer here is asked for, per side.
-#
-# The picture is drawn into a graphics texture, and a texture wider than the
-# device allows is not an error that can be caught: macOS Metal fails an
-# assertion and the process is gone, taking the server with it.  8192 is the
-# smallest maximum in common use, so it is the one to stay inside.  The plots
-# are drawn by matplotlib and are not affected.
-MAX_VIEW_PX = 8192
+#: The largest 3D view the interface offers, before the machine has its say.
+MAX_VIEW_PX = 12000
+
+#: Sizes at or below this are drawn without measuring anything: every renderer
+#: manages them, and ordinary use never goes near the limit.
+SAFE_VIEW_PX = 1024
+
+
+def safe_view_size(width, height) -> tuple[int, int]:
+    """*width* and *height* brought inside what this machine can actually draw.
+
+    A texture larger than the graphics device allows is not an error that can
+    be caught: macOS fails a Metal assertion and the process is gone.  The
+    limit differs from machine to machine, so it is measured rather than
+    guessed, and only when a size is asked for that could exceed it.
+    """
+    width = int(min(max(width, 32), MAX_VIEW_PX))
+    height = int(min(max(height, 32), MAX_VIEW_PX))
+    if max(width, height) <= SAFE_VIEW_PX:
+        return width, height
+    from ..renderlimit import max_view_px
+
+    limit = max_view_px()
+    return min(width, limit), min(height, limit)
 
 
 def render_scene(

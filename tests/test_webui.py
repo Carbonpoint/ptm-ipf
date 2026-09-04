@@ -1177,10 +1177,10 @@ def test_the_view_can_be_rendered_at_export_size(base, analysed, renderer):
     assert _decode_png(body).shape[:2] == (1080, 1920)
     # A size the graphics device could not hold is clamped, not attempted:
     # too wide a texture aborts the process rather than raising.
-    from ptmipf.webui.rendering import MAX_VIEW_PX
+    from ptmipf.renderlimit import max_view_px
 
     body = _get(base, "/api/render?w=99999&h=64")[2]
-    assert _decode_png(body).shape[1] == MAX_VIEW_PX
+    assert _decode_png(body).shape[1] == max_view_px()
 
 
 def test_a_post_that_ignores_its_body_does_not_corrupt_the_next_request(base, analysed):

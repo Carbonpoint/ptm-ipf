@@ -17,11 +17,16 @@ import pytest
 pytest.importorskip("ovito")
 
 #: The sizes the interface itself can ask for: the screen, a 1080p export, a
-#: 4K one, and the widest view the server will render.  Anything wider is
-#: clamped there, because macOS aborts on a texture past the device limit.
-from ptmipf.webui.rendering import MAX_VIEW_PX  # noqa: E402
+#: 4K one, and the widest view this machine says it can draw.  The server
+#: clamps to that same measurement, so nothing here should ever die.
+from ptmipf.renderlimit import max_view_px  # noqa: E402
 
-SIZES = [(320, 240), (1920, 1080), (3840, 2160), (MAX_VIEW_PX, 64)]
+
+def _sizes():
+    return [(320, 240), (1920, 1080), (3840, 2160), (max_view_px(), 64)]
+
+
+SIZES = _sizes()
 
 PROBE = """
 import sys
@@ -61,3 +66,30 @@ def test_the_renderer_survives_the_sizes_the_interface_offers(width, height, ren
         f"the renderer died on {width}x{height} with return code "
         f"{outcome.returncode}: {outcome.stdout[-2000:]} {outcome.stderr[-2000:]}"
     )
+
+
+def test_the_measurement_reads_what_the_child_managed(monkeypatch):
+    """The child dies part way through on purpose; what it printed still counts."""
+    import subprocess
+
+    from ptmipf import renderlimit
+
+    class _Died:
+        stdout = "drew 1024\ndrew 2048\n"
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Died())
+    monkeypatch.setattr(renderlimit, "_measured", None)
+    assert renderlimit.max_view_px() == 2048
+
+
+def test_a_machine_that_cannot_measure_gets_the_floor(monkeypatch):
+    import subprocess
+
+    from ptmipf import renderlimit
+
+    def explode(*args, **kwargs):
+        raise OSError("no child processes here")
+
+    monkeypatch.setattr(subprocess, "run", explode)
+    monkeypatch.setattr(renderlimit, "_measured", None)
+    assert renderlimit.max_view_px() == renderlimit.FLOOR
