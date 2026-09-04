@@ -226,9 +226,10 @@ direction, rotations, an analysed slice, boundary filling, the camera of the
 Choose the range (`from`, `to`, `every`), the seconds per frame for movies,
 and tick the outputs wanted: the 3D view, the IPF map, the pole figures, the
 IPF density and the colour key, each as PNG or SVG stills or as a GIF or MP4
-movie. MP4 needs `imageio[ffmpeg]`, as `--animate` does: without it the
-mp4 boxes are greyed out, and a run that asks for one anyway is refused
-before the first frame is matched rather than after the last. If an encoder
+movie. Both movie formats work with a plain install. Should an environment
+lack the MP4 encoder all the same, the mp4 boxes are greyed out and a run
+that asks for one anyway is refused before the first frame is matched, rather
+than after the last; `ptmipf-ui --check` reports it either way. If an encoder
 fails part way, the stills are kept and the trouble is reported under the
 progress bar. Several
 outputs can be produced in one run. Stills are written one per frame as

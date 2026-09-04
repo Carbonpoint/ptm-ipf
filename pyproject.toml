@@ -33,10 +33,15 @@ dependencies = [
     # found broken later.
     "ovito>=3.7; python_version < '3.14'",
     "ovito>=3.16; python_version >= '3.14'",
+    # imageio-ffmpeg carries its own ffmpeg build, which is tens of megabytes,
+    # but a movie of a run is what most people want a series render for, and
+    # having to install it afterwards is a poor way to find that out.
+    "imageio[ffmpeg]>=2.28",
 ]
 
 [project.optional-dependencies]
 test = ["pytest>=7", "ase>=3.22", "orix>=0.11", "imageio[ffmpeg]"]
+# Kept so that "ptm-ipf[video]" still resolves; MP4 support is now standard.
 video = ["imageio[ffmpeg]"]
 examples = ["ase>=3.22"]
 

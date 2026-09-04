@@ -420,8 +420,8 @@ ptmipf 'run.*.dump' --structures fcc,hcp,bcc --direction x --view z --slice-widt
 ```
 
 Frames are padded to a common size rather than resized, so the scale bar stays honest as
-the cell deforms. MP4 output needs `pip install 'imageio[ffmpeg]'` (or install ptm-ipf with
-its `video` extra, `uv tool install 'ptm-ipf[video]'`); GIF needs only Pillow.
+the cell deforms. MP4 and GIF both work out of the box: `imageio[ffmpeg]`, which carries
+its own ffmpeg, is a normal dependency.
 
 ### Filling the grain boundaries
 
