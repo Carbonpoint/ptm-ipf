@@ -38,7 +38,7 @@ class _Help(HTMLParser):
 
 def test_every_control_has_help_text():
     parser = _Help()
-    parser.feed(INDEX.read_text())
+    parser.feed(INDEX.read_text(encoding="utf-8"))
     assert parser.missing == [], (
         "these controls have no title of their own and none on a container around "
         f"them: {parser.missing}"
@@ -48,7 +48,7 @@ def test_every_control_has_help_text():
 def test_the_help_is_a_sentence_not_a_word():
     """A title of one word repeats the label and helps nobody."""
     parser = _Help()
-    text = INDEX.read_text()
+    text = INDEX.read_text(encoding="utf-8")
     parser.feed(text)
     short = [
         title

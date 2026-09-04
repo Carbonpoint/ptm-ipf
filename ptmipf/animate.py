@@ -22,9 +22,11 @@ def frame_files(pattern) -> list[Path]:
 
     ``run.*.dump`` sorts as 0, 5000, 10000 rather than 0, 10000, 5000.
     """
-    pattern = str(pattern)
-    directory, _, name = pattern.rpartition("/")
-    files = list(Path(directory or ".").glob(name))
+    # Path splits the folder from the pattern with whatever separator this
+    # system uses, which "/" alone does not: a Windows path went to glob whole
+    # and was refused as a non-relative pattern.
+    whole = Path(pattern)
+    files = list(whole.parent.glob(whole.name))
 
     def step(path: Path) -> int:
         numbers = re.findall(r"\d+", path.stem)

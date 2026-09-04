@@ -43,16 +43,29 @@ def test_every_element_the_script_reaches_for_exists():
 
     from ptmipf.webui.server import STATIC_DIR
 
-    html = (STATIC_DIR / "index.html").read_text()
-    script = (STATIC_DIR / "app.js").read_text()
+    html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+    script = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
     declared = set(re.findall(r'id="([^"]+)"', html))
     used = set(re.findall(r'\$\("([^"]+)"\)', script))
     assert used <= declared, f"app.js reaches for ids the page does not define: {used - declared}"
 
 
+def _dead(base, error):
+    """Turn "connection refused" into what the server said before it went."""
+    note = base.alive() if hasattr(base, "alive") else ""
+    if note:
+        raise AssertionError(note) from error
+    raise error
+
+
 def _get(base, path):
-    with urllib.request.urlopen(base + path, timeout=60) as response:
-        return response.status, dict(response.headers), response.read()
+    try:
+        with urllib.request.urlopen(base + path, timeout=60) as response:
+            return response.status, dict(response.headers), response.read()
+    except urllib.error.HTTPError:
+        raise  # an answer from the server, which some tests expect
+    except OSError as error:
+        _dead(base, error)
 
 
 def _get_json(base, path):
@@ -67,8 +80,13 @@ def _post_json(base, path, payload):
         data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(request, timeout=60) as response:
-        return json.loads(response.read())
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return json.loads(response.read())
+    except urllib.error.HTTPError:
+        raise  # an answer from the server, which some tests expect
+    except OSError as error:
+        _dead(base, error)
 
 
 def _decode_png(body: bytes) -> np.ndarray:
@@ -88,6 +106,15 @@ def served_dir(tmp_path_factory):
     return directory
 
 
+class _Server(str):
+    """The base URL, which can also say why the server behind it has died."""
+
+    def __new__(cls, url: str, alive):
+        server = super().__new__(cls, url)
+        server.alive = alive
+        return server
+
+
 @pytest.fixture(scope="module")
 def base(served_dir):
     process = subprocess.Popen(
@@ -99,21 +126,39 @@ def base(served_dir):
         stderr=subprocess.STDOUT,
         text=True,
     )
-    # The server prints its ephemeral address once it is listening.
-    killer = threading.Timer(60, process.kill)
-    killer.start()
-    url = None
-    try:
+    # Everything the server says is drained into this list by a thread of its
+    # own.  Nobody was reading after the address line, so a chatty server
+    # filled the pipe and stopped, and a server that died took its reason with
+    # it: every test then failed with nothing but "connection refused".
+    said: list[str] = []
+    address: list[str] = []
+    ready = threading.Event()
+
+    def drain():
         for line in process.stdout:
-            if "http://127.0.0.1:" in line:
-                url = "http://" + line.split("http://", 1)[1].split("/", 1)[0]
-                break
-    finally:
-        killer.cancel()
-    if url is None:
+            said.append(line)
+            if not address and "http://127.0.0.1:" in line:
+                address.append("http://" + line.split("http://", 1)[1].split("/", 1)[0])
+                ready.set()
+        ready.set()  # the server has closed its output, so nothing more is coming
+
+    reader = threading.Thread(target=drain, daemon=True)
+    reader.start()
+    ready.wait(60)
+    if not address:
         process.kill()
-        pytest.fail("the web UI server did not start")
-    yield url
+        pytest.fail("the web UI server did not start: " + "".join(said[-20:]))
+
+    def alive():
+        """Say why the server is gone, for a test that cannot reach it."""
+        if process.poll() is None:
+            return ""
+        return (
+            f"the server exited with {process.returncode} during the tests; "
+            "its last words were: " + "".join(said[-30:])
+        )
+
+    yield _Server(address[0], alive)
     process.terminate()
     process.wait(timeout=30)
 
@@ -289,7 +334,9 @@ def test_command_has_a_one_line_form(base, analysed):
     outcome = _post_json(base, "/api/command", {"poles": ["0001"]})
     assert "\\\n" in outcome["command"]
     assert "\n" not in outcome["one_line"]
-    assert "\\" not in outcome["one_line"]
+    # A Windows path is full of backslashes; what must be gone is the line
+    # continuation, which is a backslash at the end of a line.
+    assert "\\\n" not in outcome["one_line"]
     assert outcome["one_line"].split() == outcome["command"].replace("\\\n", " ").split()
 
 

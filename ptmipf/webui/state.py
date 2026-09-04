@@ -1074,9 +1074,19 @@ def _qt_pairing_check() -> tuple[bool, str]:
             for text in (metadata.requires("ovito") or [])
             if Requirement(text).name.lower() == "pyside6"
         ]
-        installed = metadata.version("PySide6")
     except metadata.PackageNotFoundError as exc:
-        return False, f"not installed: {exc}"
+        return False, f"OVITO is not installed: {exc}"
+    # OVITO asks for PySide6 but is satisfied by PySide6-Essentials, which is
+    # what actually gets installed; either name carries the Qt that matters.
+    installed = ""
+    for name in ("PySide6", "PySide6-Essentials", "shiboken6"):
+        try:
+            installed = metadata.version(name)
+            break
+        except metadata.PackageNotFoundError:
+            continue
+    if not installed:
+        return False, "no PySide6 is installed, so OVITO cannot load its bindings"
     if not wanted:
         return True, f"PySide6 {installed}, which this OVITO does not constrain"
     rule = wanted[0]

@@ -221,7 +221,7 @@ def _run_atomsk(binary: str, arguments: list[str], directory: Path) -> None:
 
 def _read_lammps_data(path: Path) -> tuple[np.ndarray, float]:
     """Positions and the cube edge from a LAMMPS data file atomsk wrote."""
-    lines = Path(path).read_text().splitlines()
+    lines = Path(path).read_text(encoding="utf-8").splitlines()
     bounds, start, count = {}, None, 0
     for index, line in enumerate(lines):
         stripped = line.split("#")[0].strip()
@@ -290,7 +290,7 @@ def atomsk_polycrystal(
     seeds = rng.random((len(rotations), 3)) * box
 
     nodes = directory / f"{stem}.nodes"
-    with open(nodes, "w") as handle:
+    with open(nodes, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(f"box {box:.6f} {box:.6f} {box:.6f}\n")
         for point, rotation in zip(seeds, rotations):
             tx, ty, tz = xyz_angles(rotation)
@@ -500,7 +500,7 @@ def write_structure_files(crystal: Polycrystal, directory, stem: str = "structur
     xyz = directory / f"{stem}.xyz"
     write_data_file(crystal, data)
 
-    with open(xyz, "w") as handle:
+    with open(xyz, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(f"{crystal.n_atoms}\n")
         lattice = f"{crystal.box:.8f} 0.0 0.0 0.0 {crystal.box:.8f} 0.0 0.0 0.0 {crystal.box:.8f}"
         handle.write(

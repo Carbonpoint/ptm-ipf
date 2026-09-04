@@ -91,7 +91,7 @@ def write_extxyz(result, path, keys=None) -> None:
 
     formats = ["%.5f", "%.5f", "%.5f", "%d", "%.5f", "%.5f", "%.5f", "%.5f"]
     formats += ["%.8f"] * len(extra)
-    with open(path, "w") as handle:
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(f"{n}\n")
         handle.write(" ".join(comment) + "\n")
         # The numbers are formatted a block at a time by NumPy and the species
@@ -142,7 +142,7 @@ def write_lammps_dump(result, path, keys=None) -> None:
     """
     cell = np.asarray(result.cell) if result.cell is not None else None
     extra = _key_columns(result, keys)
-    with open(path, "w") as handle:
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write("ITEM: TIMESTEP\n")
         handle.write(f"{result.frame_index}\n")
         handle.write("ITEM: NUMBER OF ATOMS\n")

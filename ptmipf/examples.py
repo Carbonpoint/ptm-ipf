@@ -106,7 +106,7 @@ def build_example(root, spec: ExampleSpec | None = None, **overrides) -> dict:
         strain_rate=spec.strain_rate,
         seed=spec.seed * 977 + 13,
     )
-    (directory / "in.compression").write_text(script)
+    (directory / "in.compression").write_text(script, encoding="utf-8", newline="\n")
 
     # The orientations that were built, so a map can be checked against them.
     (directory / "grains.json").write_text(
@@ -121,7 +121,9 @@ def build_example(root, spec: ExampleSpec | None = None, **overrides) -> dict:
                 "rotations": crystal.rotations.tolist(),
             },
             indent=1,
-        )
+        ),
+        encoding="utf-8",
+        newline="\n",
     )
 
     report = {
@@ -146,7 +148,7 @@ def build_example(root, spec: ExampleSpec | None = None, **overrides) -> dict:
         "files": sorted(p.name for p in directory.iterdir() if p.is_file()),
         "spec": asdict(spec),
     }
-    (directory / "README.md").write_text(_readme(report, crystal))
+    (directory / "README.md").write_text(_readme(report, crystal), encoding="utf-8", newline="\n")
     report["files"] = sorted(p.name for p in directory.iterdir() if p.is_file())
     return report
 

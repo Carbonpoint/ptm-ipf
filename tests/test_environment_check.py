@@ -118,8 +118,15 @@ def _fake_metadata(monkeypatch, requires, installed):
     from ptmipf.webui import state
 
     versions = {"PySide6": installed, "ovito": "3.15.5"}
+
+    def version(name):
+        try:
+            return versions[name]
+        except KeyError:
+            raise metadata.PackageNotFoundError(name) from None
+
     monkeypatch.setattr(metadata, "requires", lambda name: requires)
-    monkeypatch.setattr(metadata, "version", lambda name: versions[name])
+    monkeypatch.setattr(metadata, "version", version)
     return state
 
 
@@ -146,3 +153,22 @@ def test_an_ovito_that_does_not_constrain_qt_is_not_second_guessed(monkeypatch):
     state = _fake_metadata(monkeypatch, ["numpy>=2", "PySide6>=6.8.3"], installed="6.11.2")
     ok, detail = state._qt_pairing_check()
     assert ok and "6.11.2" in detail
+
+
+def test_the_qt_check_accepts_the_package_that_is_really_installed(monkeypatch):
+    """OVITO asks for PySide6 but pulls in PySide6-Essentials; that is the one there."""
+    import importlib.metadata as metadata
+
+    from ptmipf.webui import state
+
+    versions = {"PySide6-Essentials": "6.10.3", "ovito": "3.16.0"}
+
+    def version(name):
+        try:
+            return versions[name]
+        except KeyError:
+            raise metadata.PackageNotFoundError(name) from None
+
+    monkeypatch.setattr(metadata, "requires", lambda name: ["PySide6~=6.10.3"])
+    monkeypatch.setattr(metadata, "version", version)
+    assert state._qt_pairing_check() == (True, "PySide6 6.10.3")

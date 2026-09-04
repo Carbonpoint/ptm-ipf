@@ -30,7 +30,7 @@ def write_data_file(crystal, path, mass: float | None = None) -> str:
         entry = POTENTIALS.get(crystal.element)
         mass = entry.mass if entry else 1.0
     path = Path(path)
-    with open(path, "w") as handle:
+    with open(path, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(
             f"# {crystal.n_grains}-grain {crystal.element} {crystal.structure} "
             f"polycrystal from ptm-ipf ({crystal.builder} builder)\n\n"
